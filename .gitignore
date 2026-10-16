@@ -1,0 +1,51 @@
+# ---- Operational source data (never commit) ----
+*.xlsx
+*.xlsm
+*.xlsb
+*.xls
+*.ods
+*.csv
+*.tsv
+# PDFs are business documents unless they live under docs/
+*.pdf
+!docs/**/*.pdf
+
+# ---- Secrets and credentials ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+*service-account*.json
+*client_secret*.json
+secrets/
+
+# ---- Data exports, backups, import and PoC working folders ----
+backups/
+exports/
+dumps/
+*.bson
+*.archive
+import-lab/
+poc-work/
+work/
+
+# ---- Dependencies, caches and build output ----
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# ---- Logs and OS/editor files ----
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

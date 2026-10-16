@@ -1,0 +1,2 @@
+# Keep LF line endings on every platform (Prettier and CI expect LF).
+* text=auto eol=lf

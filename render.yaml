@@ -1,0 +1,34 @@
+# Render Blueprint for the PMS backend API — prepared only, NOT deployed.
+# Repository root = this backend project. Deploying requires separate authorisation.
+# Secrets are entered in the Render dashboard (sync: false), never in this file.
+# Free-tier limits and terms must be verified before relying on it.
+services:
+  - type: web
+    name: mab-pms-api
+    runtime: node
+    plan: free
+    # --include=dev: NODE_ENV=production would otherwise skip the TypeScript compiler.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: false
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: TRUST_PROXY
+        value: '1'
+      - key: MONGODB_REQUIRE_TRANSACTIONS
+        value: 'true'
+      - key: MONGODB_ALLOW_REMOTE
+        value: 'true'
+      # Skip the in-memory MongoDB test-binary download during deployment builds.
+      - key: MONGOMS_DISABLE_POSTINSTALL
+        value: '1'
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
