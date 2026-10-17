@@ -30,7 +30,8 @@ export type AuthEventType =
   | 'LOGIN_FAILED'
   | 'ACCOUNT_LOCKED'
   | 'LOGOUT'
-  | 'SESSION_EXPIRED';
+  | 'SESSION_EXPIRED'
+  | 'LOCKOUT_CLEARED';
 
 interface AuthEventDoc {
   occurredAt: Date;
@@ -103,30 +104,35 @@ export class AuthService {
     meta: RequestMeta = {},
   ): Promise<{ token: string; session: SessionDoc; user: UserRecord }> {
     const username = normaliseUsername(usernameInput).slice(0, 50);
+    const key = throttleKey(username);
     const now = new Date();
 
-    const throttle = await this.throttle.findOne({ _id: username });
+    // The typed username is only ever stored if it is an existing account's name. Anything
+    // else (a typo, or a password typed into the username field) is logged as "(unknown)".
+    const user = await this.users.findOne({ username });
+    const logName = user ? user.username : UNKNOWN_USERNAME;
+
+    const throttle = await this.throttle.findOne({ _id: key });
     if (throttle?.lockedUntil && throttle.lockedUntil > now) {
-      await this.record('LOGIN_FAILED', username, null, 'LOCKED', meta);
+      await this.record('LOGIN_FAILED', logName, user?._id ?? null, 'LOCKED', meta);
       throw new AccountLockedError();
     }
 
-    const user = await this.users.findOne({ username });
     const passwordOk = await verifyPassword(password, user?.passwordHash ?? (await getDummyHash()));
     const active = user?.lifecycle?.state === 'ACTIVE';
 
     if (!user || !passwordOk || !active) {
       const reason = !user ? 'UNKNOWN_USER' : !passwordOk ? 'BAD_PASSWORD' : 'ACCOUNT_DISABLED';
-      await this.record('LOGIN_FAILED', username, user?._id ?? null, reason, meta);
-      const locked = await this.registerFailure(username, now);
+      await this.record('LOGIN_FAILED', logName, user?._id ?? null, reason, meta);
+      const locked = await this.registerFailure(key, now);
       if (locked) {
-        await this.record('ACCOUNT_LOCKED', username, user?._id ?? null, null, meta);
+        await this.record('ACCOUNT_LOCKED', logName, user?._id ?? null, null, meta);
         throw new AccountLockedError();
       }
       throw new InvalidCredentialsError();
     }
 
-    await this.throttle.deleteOne({ _id: username });
+    await this.throttle.deleteOne({ _id: key });
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(now.getTime() + this.config.sessionTtlMs);
     const session: SessionDoc = {
@@ -148,7 +154,10 @@ export class AuthService {
    * Resolves a session token. Returns the user and session, `'expired'` for a session that timed
    * out (it is deleted), or `null` when the token is unknown or the account is no longer active.
    */
-  async resolve(token: string, meta: RequestMeta = {}): Promise<AuthenticatedContext | 'expired' | null> {
+  async resolve(
+    token: string,
+    meta: RequestMeta = {},
+  ): Promise<AuthenticatedContext | 'expired' | null> {
     if (!TOKEN_PATTERN.test(token)) return null;
     const id = hashSessionToken(token);
     const session = await this.sessions.findOne({ _id: id });
@@ -158,7 +167,13 @@ export class AuthService {
     if (session.expiresAt <= now || session.idleExpiresAt <= now) {
       await this.sessions.deleteOne({ _id: id });
       const user = await this.users.findOne({ _id: session.userId });
-      await this.record('SESSION_EXPIRED', user?.username ?? '(unknown)', session.userId, null, meta);
+      await this.record(
+        'SESSION_EXPIRED',
+        user?.username ?? '(unknown)',
+        session.userId,
+        null,
+        meta,
+      );
       return 'expired';
     }
 
@@ -169,7 +184,10 @@ export class AuthService {
     }
 
     if (now.getTime() - session.lastSeenAt.getTime() >= TOUCH_INTERVAL_MS) {
-      const idleExpiresAt = minDate(new Date(now.getTime() + this.config.sessionIdleMs), session.expiresAt);
+      const idleExpiresAt = minDate(
+        new Date(now.getTime() + this.config.sessionIdleMs),
+        session.expiresAt,
+      );
       await this.sessions.updateOne({ _id: id }, { $set: { lastSeenAt: now, idleExpiresAt } });
       session.lastSeenAt = now;
       session.idleExpiresAt = idleExpiresAt;
@@ -188,9 +206,29 @@ export class AuthService {
     return result.deletedCount;
   }
 
-  private async registerFailure(username: string, now: Date): Promise<boolean> {
+  /**
+   * Administrator recovery for a locked account (used by `user-admin unlock`). Returns whether a
+   * lockout or failure counter was cleared. Does not change the lockout rules themselves.
+   */
+  async clearLockout(usernameInput: string, meta: RequestMeta = {}): Promise<boolean> {
+    const username = normaliseUsername(usernameInput).slice(0, 50);
+    const result = await this.throttle.deleteOne({ _id: throttleKey(username) });
+    if (result.deletedCount > 0) {
+      const user = await this.users.findOne({ username });
+      await this.record(
+        'LOCKOUT_CLEARED',
+        user ? user.username : UNKNOWN_USERNAME,
+        user?._id ?? null,
+        null,
+        meta,
+      );
+    }
+    return result.deletedCount > 0;
+  }
+
+  private async registerFailure(key: string, now: Date): Promise<boolean> {
     const doc = await this.throttle.findOneAndUpdate(
-      { _id: username },
+      { _id: key },
       {
         $inc: { failures: 1 },
         $set: { expiresAt: new Date(now.getTime() + this.config.lockoutMs) },
@@ -201,7 +239,7 @@ export class AuthService {
     if (doc && doc.failures >= this.config.maxFailedLogins) {
       const lockedUntil = new Date(now.getTime() + this.config.lockoutMs);
       await this.throttle.updateOne(
-        { _id: username },
+        { _id: key },
         { $set: { failures: 0, lockedUntil, expiresAt: lockedUntil } },
       );
       return true;
@@ -225,6 +263,17 @@ export class AuthService {
       requestId: meta.requestId ?? null,
     });
   }
+}
+
+/** Logged in place of an attempted username that does not belong to an account. */
+export const UNKNOWN_USERNAME = '(unknown)';
+
+/**
+ * Lockout counters are keyed by a SHA-256 of the attempted username, so the typed text (which may
+ * be a mistyped password) is never stored as-is. Unknown and known names are counted the same way.
+ */
+export function throttleKey(username: string): string {
+  return `u:${createHash('sha256').update(username).digest('hex')}`;
 }
 
 function minDate(a: Date, b: Date): Date {

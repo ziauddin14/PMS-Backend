@@ -98,7 +98,8 @@ export class UserAdmin {
 
   private async requireActive(username: string): Promise<UserRecord> {
     const user = await this.find(username);
-    if (!user || user.lifecycle.state !== 'ACTIVE') throw new NotFoundError('Active user not found');
+    if (!user || user.lifecycle.state !== 'ACTIVE')
+      throw new NotFoundError('Active user not found');
     return user;
   }
 }

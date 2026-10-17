@@ -109,7 +109,10 @@ export function requireCsrf(): RequestHandler {
     const expected = Buffer.from(getAuth(res).session.csrfToken);
     const provided = Buffer.from(req.get('x-csrf-token') ?? '');
     if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-      throw new ForbiddenError('Security check failed. Reload the page and try again.', 'CSRF_FAILED');
+      throw new ForbiddenError(
+        'Security check failed. Reload the page and try again.',
+        'CSRF_FAILED',
+      );
     }
     next();
   };

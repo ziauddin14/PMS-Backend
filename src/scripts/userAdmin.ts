@@ -5,6 +5,7 @@
  *   npm run user-admin -- set-password --username usman
  *   npm run user-admin -- set-role --username usman --role VIEWER
  *   npm run user-admin -- disable --username usman --reason "Left the department"
+ *   npm run user-admin -- unlock --username usman
  *   npm run user-admin -- list
  *
  * Passwords are never accepted as command-line arguments (they would end up in shell history).
@@ -134,13 +135,23 @@ async function main(): Promise<void> {
         await admin.disable(username, values.reason ?? '');
         out('Account disabled; existing sessions were signed out.');
         break;
+      case 'unlock':
+        if (!username) fail('unlock requires --username');
+        out(
+          (await auth.clearLockout(username))
+            ? 'Sign-in lockout cleared.'
+            : 'No active lockout or failure count for that username.',
+        );
+        break;
       case 'list':
         for (const u of await admin.list()) {
-          out(`${u.code}  ${u.username.padEnd(20)} ${u.role.padEnd(9)} ${u.state}  ${u.displayName}`);
+          out(
+            `${u.code}  ${u.username.padEnd(20)} ${u.role.padEnd(9)} ${u.state}  ${u.displayName}`,
+          );
         }
         break;
       default:
-        fail('Usage: user-admin <create|set-password|set-role|disable|list> [options]');
+        fail('Usage: user-admin <create|set-password|set-role|disable|unlock|list> [options]');
     }
   } catch (error) {
     if (error instanceof AppError) {

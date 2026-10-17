@@ -29,7 +29,15 @@ export const sessionsCollectionSpec: CollectionSpec = {
   validator: {
     $jsonSchema: {
       bsonType: 'object',
-      required: ['_id', 'userId', 'csrfToken', 'createdAt', 'lastSeenAt', 'expiresAt', 'idleExpiresAt'],
+      required: [
+        '_id',
+        'userId',
+        'csrfToken',
+        'createdAt',
+        'lastSeenAt',
+        'expiresAt',
+        'idleExpiresAt',
+      ],
       properties: {
         _id: { bsonType: 'string', pattern: '^[a-f0-9]{64}$' },
         userId: { bsonType: 'objectId' },
@@ -48,7 +56,10 @@ export const sessionsCollectionSpec: CollectionSpec = {
   ],
 };
 
-/** Failed-login counters per username, used for temporary lockout. Removed by TTL. */
+/**
+ * Failed-login counters, used for temporary lockout. `_id` is `u:` + SHA-256 of the attempted
+ * username (never the typed text itself). Removed by TTL.
+ */
 export const loginThrottleCollectionSpec: CollectionSpec = {
   name: AUTH_COLLECTIONS.loginThrottle,
   validator: {
@@ -56,7 +67,7 @@ export const loginThrottleCollectionSpec: CollectionSpec = {
       bsonType: 'object',
       required: ['_id', 'failures', 'expiresAt'],
       properties: {
-        _id: { bsonType: 'string' },
+        _id: { bsonType: 'string', pattern: '^u:[a-f0-9]{64}$' },
         failures: { bsonType: ['int', 'long'], minimum: 0 },
         lockedUntil: { bsonType: ['date', 'null'] },
         expiresAt: { bsonType: 'date' },
@@ -76,7 +87,14 @@ export const authEventsCollectionSpec: CollectionSpec = {
       properties: {
         occurredAt: { bsonType: 'date' },
         type: {
-          enum: ['LOGIN_SUCCEEDED', 'LOGIN_FAILED', 'ACCOUNT_LOCKED', 'LOGOUT', 'SESSION_EXPIRED'],
+          enum: [
+            'LOGIN_SUCCEEDED',
+            'LOGIN_FAILED',
+            'ACCOUNT_LOCKED',
+            'LOGOUT',
+            'SESSION_EXPIRED',
+            'LOCKOUT_CLEARED',
+          ],
         },
         username: { bsonType: 'string', maxLength: 50 },
         userId: { bsonType: ['objectId', 'null'] },

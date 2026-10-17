@@ -5,6 +5,9 @@ import { ensureInfrastructureCollections } from './db/collections.js';
 import { connectToDatabase, DatabaseConnectionError, type Database } from './db/mongo.js';
 import { createApp } from './http/app.js';
 import { createLogger } from './logger.js';
+import { ensureMasterDataCollections } from './masterData/definitions.js';
+import { MasterDataService } from './masterData/masterDataService.js';
+import { RecordStore } from './records/recordStore.js';
 
 async function main(): Promise<void> {
   let config;
@@ -24,6 +27,7 @@ async function main(): Promise<void> {
     database = await connectToDatabase(config.mongodb, logger);
     await ensureInfrastructureCollections(database.db);
     await ensureAuthCollections(database.db);
+    await ensureMasterDataCollections(database.db);
   } catch (error) {
     const message =
       error instanceof DatabaseConnectionError ? error.message : 'Database initialisation failed';
@@ -32,7 +36,8 @@ async function main(): Promise<void> {
   }
 
   const authService = new AuthService(database, config.auth);
-  const app = createApp({ config, logger, database, authService });
+  const masterDataService = new MasterDataService(database, new RecordStore(database));
+  const app = createApp({ config, logger, database, authService, masterDataService });
   const server = app.listen(config.port, config.host, () => {
     logger.info({ host: config.host, port: config.port, env: config.nodeEnv }, 'API listening');
   });

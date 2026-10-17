@@ -3,7 +3,7 @@
 Node.js + Express + TypeScript + MongoDB API for the MAB Production Management System.
 Separate repository from the frontend (`../frontend`). Deployment target: Render (this folder is the project root).
 
-**Status:** M2 — Project Foundation & Database. Health endpoints and the database/record foundation only; no business endpoints yet. Technical notes: [`docs/m2-foundation.md`](docs/m2-foundation.md).
+**Status:** M4 — Master Data. Sign-in, sessions, roles, dashboard summary and master-data APIs (provinces, divisions, departments, items, vendors, warehouses). Technical notes: [`docs/m2-foundation.md`](docs/m2-foundation.md), [`docs/m3-auth-dashboard.md`](docs/m3-auth-dashboard.md), [`docs/m4-master-data.md`](docs/m4-master-data.md).
 
 > **Data safety.** Never place workbooks, exports, backups or real business data in this repository. Tests use synthetic data only. Do not connect to MongoDB Atlas until it is separately authorised.
 
@@ -30,6 +30,14 @@ npm run dev
 - `GET http://127.0.0.1:4000/api/health` — liveness
 - `GET http://127.0.0.1:4000/api/health/ready` — database readiness
 
+There are no default accounts. Create one with the user-admin tool (the password is asked at a hidden prompt):
+
+```bash
+npm run user-admin -- create --username usman --display-name "Usman Bhai" --role OPERATOR
+```
+
+**Without a local MongoDB:** `npm run dev:memory` runs the API on a throw-away in-memory database and prints two synthetic demo accounts with one-time passwords (development only; data is lost on exit).
+
 ## Checks
 
 | Command                    | What it does                                   |
@@ -41,6 +49,8 @@ npm run dev
 | `npm run test:integration` | Integration tests against an in-memory MongoDB |
 | `npm run build`            | Compile to `dist/`                             |
 | `npm start`                | Run the compiled API                           |
+| `npm run user-admin -- …`  | Create, list, disable, unlock; reset password  |
+| `npm run dev:memory`       | Dev API on an in-memory DB with demo accounts  |
 | `npm run format:check`     | Prettier check                                 |
 | `npm run check`            | Lint, typecheck, tests and build               |
 

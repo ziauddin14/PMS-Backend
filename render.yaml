@@ -32,3 +32,7 @@ services:
         sync: false
       - key: CORS_ALLOWED_ORIGINS
         sync: false
+      # "lax" if the frontend reaches the API on the same site (custom domains or a Vercel
+      # rewrite proxy); "none" only if they are on different sites. See docs/m3-auth-dashboard.md.
+      - key: SESSION_COOKIE_SAMESITE
+        sync: false

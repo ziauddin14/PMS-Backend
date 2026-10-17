@@ -55,7 +55,10 @@ export class UnauthenticatedError extends AppError {
 }
 
 export class ForbiddenError extends AppError {
-  constructor(message = 'You do not have permission for this action', code: 'FORBIDDEN' | 'CSRF_FAILED' = 'FORBIDDEN') {
+  constructor(
+    message = 'You do not have permission for this action',
+    code: 'FORBIDDEN' | 'CSRF_FAILED' = 'FORBIDDEN',
+  ) {
     super(403, code, message);
   }
 }

@@ -8,6 +8,8 @@ import { authRoutes } from './authRoutes.js';
 import { corsWithAllowList } from './cors.js';
 import { dashboardRoutes } from './dashboardRoutes.js';
 import { healthRoutes, type DatabaseProbe } from './healthRoutes.js';
+import type { MasterDataService } from '../masterData/masterDataService.js';
+import { masterDataRoutes } from './masterDataRoutes.js';
 import {
   errorHandler,
   notFoundHandler,
@@ -22,6 +24,8 @@ export interface AppDependencies {
   database?: DatabaseProbe;
   /** Authentication service; when absent, the auth and dashboard routes are not mounted. */
   authService?: AuthService;
+  /** Master-data service; mounted only together with the auth service. */
+  masterDataService?: MasterDataService;
   /** Extra routers mounted under `/api` (used by tests; business routes arrive in later milestones). */
   extraRouters?: Router[];
 }
@@ -31,6 +35,7 @@ export function createApp({
   logger,
   database,
   authService,
+  masterDataService,
   extraRouters = [],
 }: AppDependencies): Express {
   const app = express();
@@ -57,6 +62,9 @@ export function createApp({
   if (authService && database) {
     app.use('/api', authRoutes(authService, config));
     app.use('/api', dashboardRoutes(authService, config, database));
+    if (masterDataService) {
+      app.use('/api', masterDataRoutes(authService, config, masterDataService));
+    }
   }
   for (const router of extraRouters) app.use('/api', router);
 

@@ -1,4 +1,9 @@
-import { randomBytes, scrypt as scryptCallback, timingSafeEqual, type ScryptOptions } from 'node:crypto';
+import {
+  randomBytes,
+  scrypt as scryptCallback,
+  timingSafeEqual,
+  type ScryptOptions,
+} from 'node:crypto';
 
 /**
  * Password hashing with Node's built-in scrypt (no extra dependency).

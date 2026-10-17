@@ -13,6 +13,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "user-admin": "tsx --env-file-if-exists=.env src/scripts/userAdmin.ts",
+    "dev:memory": "tsx scripts/dev-memory.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",

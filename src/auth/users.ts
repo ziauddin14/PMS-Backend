@@ -8,9 +8,9 @@ export const USERNAME_PATTERN = /^[a-z0-9._-]{3,50}$/;
 
 const userCreateSchema = z
   .object({
-    username: z
-      .string()
-      .regex(USERNAME_PATTERN, { message: 'Username must be 3-50 lowercase letters, digits, ".", "_" or "-"' }),
+    username: z.string().regex(USERNAME_PATTERN, {
+      message: 'Username must be 3-50 lowercase letters, digits, ".", "_" or "-"',
+    }),
     displayName: z.string().trim().min(1).max(100),
     role: z.enum(userRoles),
     passwordHash: z.string().regex(PASSWORD_HASH_PATTERN, { message: 'Invalid password hash' }),
