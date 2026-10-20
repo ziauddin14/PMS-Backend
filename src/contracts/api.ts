@@ -190,3 +190,177 @@ export const masterUpdateSchema = z
     message: 'Nothing to update',
   });
 export type MasterUpdateInput = z.infer<typeof masterUpdateSchema>;
+
+/**
+ * Demand management (M5). Fields follow M1 BRD Step 2 and 02 §2.1: a demand has a date,
+ * department, requesting province (optional division) and a source reference (e-mail subject);
+ * each line is an item for one destination division (A-04) with a requested quantity and optional
+ * receiver contact. The PMS code (DMD-000001) is the unique Demand Number (D1).
+ */
+export const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+export const dateOnlySchema = z
+  .string({ message: 'Date is required' })
+  .regex(DATE_ONLY_PATTERN, { message: 'Use the format YYYY-MM-DD' })
+  .refine(
+    (value) => {
+      const date = new Date(`${value}T00:00:00Z`);
+      return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+    },
+    { message: 'Not a valid date' },
+  );
+
+const optionalText = (max: number, label: string) =>
+  z
+    .string()
+    .trim()
+    .max(max, { message: `${label} must be at most ${max} characters` })
+    .refine((value) => !/\p{Cc}/u.test(value), { message: `${label} contains invalid characters` })
+    .transform((value) => (value.length === 0 ? null : value))
+    .nullable()
+    .optional();
+
+export const demandLineInputSchema = z
+  .object({
+    /** Present for existing lines when editing; absent for new lines. */
+    id: objectIdStringSchema.optional(),
+    itemId: objectIdStringSchema,
+    destinationDivisionId: objectIdStringSchema,
+    quantity: z
+      .number({ message: 'Quantity is required' })
+      .int({ message: 'Quantity must be a whole number' })
+      .min(1, { message: 'Quantity must be at least 1' })
+      .max(10_000_000, { message: 'Quantity is too large' }),
+    receiverName: optionalText(100, 'Receiver name'),
+    receiverPhone: optionalText(30, 'Receiver phone').refine(
+      (value) => value === null || value === undefined || /^[0-9+()\-\s]{5,30}$/.test(value),
+      { message: 'Receiver phone may contain only digits, spaces, +, - and brackets' },
+    ),
+  })
+  .strict();
+export type DemandLineInput = z.infer<typeof demandLineInputSchema>;
+
+const linesSchema = z
+  .array(demandLineInputSchema)
+  .min(1, { message: 'Add at least one item' })
+  .max(200, { message: 'A demand can have at most 200 lines' });
+
+export const demandCreateSchema = z
+  .object({
+    demandDate: dateOnlySchema,
+    departmentId: objectIdStringSchema,
+    provinceId: objectIdStringSchema,
+    divisionId: objectIdStringSchema.nullable().optional(),
+    sourceReference: optionalText(200, 'Source reference'),
+    lines: linesSchema,
+  })
+  .strict();
+export type DemandCreateInput = z.infer<typeof demandCreateSchema>;
+
+export const demandUpdateSchema = z
+  .object({
+    rev: z.number({ message: 'rev is required' }).int().min(1),
+    demandDate: dateOnlySchema.optional(),
+    departmentId: objectIdStringSchema.optional(),
+    provinceId: objectIdStringSchema.optional(),
+    divisionId: objectIdStringSchema.nullable().optional(),
+    sourceReference: optionalText(200, 'Source reference'),
+    lines: linesSchema.optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).some((key) => key !== 'rev'), { message: 'Nothing to update' });
+export type DemandUpdateInput = z.infer<typeof demandUpdateSchema>;
+
+export const demandCancelSchema = z
+  .object({
+    rev: z.number({ message: 'rev is required' }).int().min(1),
+    reason: z
+      .string({ message: 'Reason is required' })
+      .trim()
+      .min(1, { message: 'Reason is required' })
+      .max(500, { message: 'Reason must be at most 500 characters' }),
+  })
+  .strict();
+export type DemandCancelInput = z.infer<typeof demandCancelSchema>;
+
+export const demandSorts = ['demandDate_desc', 'demandDate_asc', 'code_desc', 'code_asc'] as const;
+
+export const demandListQuerySchema = z
+  .object({
+    search: z.string().trim().max(100).optional(),
+    status: z.enum(['open', 'cancelled', 'all']).default('open'),
+    departmentId: objectIdStringSchema.optional(),
+    provinceId: objectIdStringSchema.optional(),
+    from: dateOnlySchema.optional(),
+    to: dateOnlySchema.optional(),
+    sort: z.enum(demandSorts).default('demandDate_desc'),
+    page: z.coerce.number().int().min(1).max(10000).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  })
+  .strict()
+  .refine((v) => !v.from || !v.to || v.from <= v.to, {
+    message: '"from" must not be after "to"',
+    path: ['from'],
+  });
+export type DemandListQuery = z.infer<typeof demandListQuerySchema>;
+
+export const masterRefSchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  name: z.string(),
+  active: z.boolean(),
+});
+export type MasterRef = z.infer<typeof masterRefSchema>;
+
+/** Derived from dispatch lines (M8). Until dispatches exist every open line is PENDING. */
+export const fulfilmentStatuses = ['PENDING', 'PARTIAL', 'DELIVERED'] as const;
+
+export const demandSummarySchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  demandDate: z.string(),
+  status: z.enum(['OPEN', 'CANCELLED']),
+  fulfilment: z.enum(fulfilmentStatuses),
+  department: masterRefSchema,
+  province: masterRefSchema,
+  division: masterRefSchema.nullable(),
+  sourceReference: z.string().nullable(),
+  lineCount: z.number().int(),
+  totalQuantity: z.number().int(),
+  rev: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type DemandSummary = z.infer<typeof demandSummarySchema>;
+
+export const demandLineSchema = z.object({
+  id: z.string(),
+  lineNo: z.number().int(),
+  item: masterRefSchema,
+  destinationDivision: masterRefSchema.extend({ provinceName: z.string().nullable() }),
+  quantity: z.number().int(),
+  quantityDelivered: z.number().int(),
+  quantityRemaining: z.number().int(),
+  fulfilment: z.enum(fulfilmentStatuses),
+  /** Personal data: omitted for read-only users (Q-30 open; most restrictive default). */
+  receiverName: z.string().nullable().optional(),
+  receiverPhone: z.string().nullable().optional(),
+});
+export type DemandLine = z.infer<typeof demandLineSchema>;
+
+export const demandDetailSchema = demandSummarySchema.extend({
+  lines: z.array(demandLineSchema),
+  cancellation: z
+    .object({ at: z.string(), reason: z.string(), by: z.string().nullable() })
+    .nullable(),
+  personalDataVisible: z.boolean(),
+});
+export type DemandDetail = z.infer<typeof demandDetailSchema>;
+
+export const demandListResponseSchema = z.object({
+  items: z.array(demandSummarySchema),
+  page: z.number().int(),
+  pageSize: z.number().int(),
+  total: z.number().int(),
+});
+export type DemandListResponse = z.infer<typeof demandListResponseSchema>;

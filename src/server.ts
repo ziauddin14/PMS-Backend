@@ -8,6 +8,8 @@ import { createLogger } from './logger.js';
 import { ensureMasterDataCollections } from './masterData/definitions.js';
 import { MasterDataService } from './masterData/masterDataService.js';
 import { RecordStore } from './records/recordStore.js';
+import { ensureDemandCollections } from './demands/definitions.js';
+import { DemandService } from './demands/demandService.js';
 
 async function main(): Promise<void> {
   let config;
@@ -28,6 +30,7 @@ async function main(): Promise<void> {
     await ensureInfrastructureCollections(database.db);
     await ensureAuthCollections(database.db);
     await ensureMasterDataCollections(database.db);
+    await ensureDemandCollections(database.db);
   } catch (error) {
     const message =
       error instanceof DatabaseConnectionError ? error.message : 'Database initialisation failed';
@@ -36,8 +39,17 @@ async function main(): Promise<void> {
   }
 
   const authService = new AuthService(database, config.auth);
-  const masterDataService = new MasterDataService(database, new RecordStore(database));
-  const app = createApp({ config, logger, database, authService, masterDataService });
+  const store = new RecordStore(database);
+  const masterDataService = new MasterDataService(database, store);
+  const demandService = new DemandService(database, store);
+  const app = createApp({
+    config,
+    logger,
+    database,
+    authService,
+    masterDataService,
+    demandService,
+  });
   const server = app.listen(config.port, config.host, () => {
     logger.info({ host: config.host, port: config.port, env: config.nodeEnv }, 'API listening');
   });

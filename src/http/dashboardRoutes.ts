@@ -49,10 +49,17 @@ export const DASHBOARD_INDICATORS: ReadonlyArray<Omit<DashboardIndicator, 'statu
   },
 ];
 
+/**
+ * Sources for indicators whose module exists. An indicator without a source (or whose source
+ * fails) stays `not_available`; nothing is estimated.
+ */
+export type IndicatorSources = Partial<Record<string, () => Promise<number>>>;
+
 export function dashboardRoutes(
   service: AuthService,
   config: AppConfig,
   database: DatabaseProbe,
+  sources: IndicatorSources = {},
 ): Router {
   const router = Router();
 
@@ -62,14 +69,19 @@ export function dashboardRoutes(
     requireRole('OPERATOR', 'VIEWER'),
     async (_req, res) => {
       const up = await database.ping().catch(() => false);
+      const indicators = await Promise.all(
+        DASHBOARD_INDICATORS.map(async (indicator) => {
+          const source = sources[indicator.key];
+          const value = source ? await source().catch(() => null) : null;
+          return value === null
+            ? { ...indicator, status: 'not_available' as const, value: null }
+            : { ...indicator, status: 'available' as const, value, plannedMilestone: null };
+        }),
+      );
       const body: DashboardSummary = {
         generatedAt: new Date().toISOString(),
         user: toSessionUser(getAuth(res).user),
-        indicators: DASHBOARD_INDICATORS.map((indicator) => ({
-          ...indicator,
-          status: 'not_available',
-          value: null,
-        })),
+        indicators,
         system: { database: up ? 'up' : 'down' },
       };
       res.json(body);

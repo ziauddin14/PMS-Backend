@@ -10,6 +10,8 @@ import { dashboardRoutes } from './dashboardRoutes.js';
 import { healthRoutes, type DatabaseProbe } from './healthRoutes.js';
 import type { MasterDataService } from '../masterData/masterDataService.js';
 import { masterDataRoutes } from './masterDataRoutes.js';
+import type { DemandService } from '../demands/demandService.js';
+import { demandRoutes } from './demandRoutes.js';
 import {
   errorHandler,
   notFoundHandler,
@@ -26,6 +28,8 @@ export interface AppDependencies {
   authService?: AuthService;
   /** Master-data service; mounted only together with the auth service. */
   masterDataService?: MasterDataService;
+  /** Demand service; mounted only together with the auth service. */
+  demandService?: DemandService;
   /** Extra routers mounted under `/api` (used by tests; business routes arrive in later milestones). */
   extraRouters?: Router[];
 }
@@ -36,6 +40,7 @@ export function createApp({
   database,
   authService,
   masterDataService,
+  demandService,
   extraRouters = [],
 }: AppDependencies): Express {
   const app = express();
@@ -61,9 +66,20 @@ export function createApp({
   app.use('/api', healthRoutes(database));
   if (authService && database) {
     app.use('/api', authRoutes(authService, config));
-    app.use('/api', dashboardRoutes(authService, config, database));
+    app.use(
+      '/api',
+      dashboardRoutes(
+        authService,
+        config,
+        database,
+        demandService ? { openDemands: () => demandService.countOpenLines() } : {},
+      ),
+    );
     if (masterDataService) {
       app.use('/api', masterDataRoutes(authService, config, masterDataService));
+    }
+    if (demandService) {
+      app.use('/api', demandRoutes(authService, config, demandService));
     }
   }
   for (const router of extraRouters) app.use('/api', router);

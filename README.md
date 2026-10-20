@@ -3,7 +3,7 @@
 Node.js + Express + TypeScript + MongoDB API for the MAB Production Management System.
 Separate repository from the frontend (`../frontend`). Deployment target: Render (this folder is the project root).
 
-**Status:** M4 — Master Data. Sign-in, sessions, roles, dashboard summary and master-data APIs (provinces, divisions, departments, items, vendors, warehouses). Technical notes: [`docs/m2-foundation.md`](docs/m2-foundation.md), [`docs/m3-auth-dashboard.md`](docs/m3-auth-dashboard.md), [`docs/m4-master-data.md`](docs/m4-master-data.md).
+**Status:** M5 — Demand Management. Sign-in, sessions, roles, dashboard summary, master-data APIs (provinces, divisions, departments, items, vendors, warehouses) and demand APIs (register, list, edit, cancel). Technical notes: [`docs/m2-foundation.md`](docs/m2-foundation.md), [`docs/m3-auth-dashboard.md`](docs/m3-auth-dashboard.md), [`docs/m4-master-data.md`](docs/m4-master-data.md), [`docs/m5-demand-management.md`](docs/m5-demand-management.md).
 
 > **Data safety.** Never place workbooks, exports, backups or real business data in this repository. Tests use synthetic data only. Do not connect to MongoDB Atlas until it is separately authorised.
 
