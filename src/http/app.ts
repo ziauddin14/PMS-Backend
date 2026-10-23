@@ -12,6 +12,8 @@ import type { MasterDataService } from '../masterData/masterDataService.js';
 import { masterDataRoutes } from './masterDataRoutes.js';
 import type { DemandService } from '../demands/demandService.js';
 import { demandRoutes } from './demandRoutes.js';
+import type { PurchaseOrderService } from '../purchaseOrders/purchaseOrderService.js';
+import { purchaseOrderRoutes } from './purchaseOrderRoutes.js';
 import {
   errorHandler,
   notFoundHandler,
@@ -30,6 +32,8 @@ export interface AppDependencies {
   masterDataService?: MasterDataService;
   /** Demand service; mounted only together with the auth service. */
   demandService?: DemandService;
+  /** Purchase order service; mounted only together with the auth service. */
+  purchaseOrderService?: PurchaseOrderService;
   /** Extra routers mounted under `/api` (used by tests; business routes arrive in later milestones). */
   extraRouters?: Router[];
 }
@@ -41,6 +45,7 @@ export function createApp({
   authService,
   masterDataService,
   demandService,
+  purchaseOrderService,
   extraRouters = [],
 }: AppDependencies): Express {
   const app = express();
@@ -68,18 +73,21 @@ export function createApp({
     app.use('/api', authRoutes(authService, config));
     app.use(
       '/api',
-      dashboardRoutes(
-        authService,
-        config,
-        database,
-        demandService ? { openDemands: () => demandService.countOpenLines() } : {},
-      ),
+      dashboardRoutes(authService, config, database, {
+        ...(demandService ? { openDemands: () => demandService.countOpenLines() } : {}),
+        ...(purchaseOrderService
+          ? { activePurchaseOrders: () => purchaseOrderService.countActiveOrders() }
+          : {}),
+      }),
     );
     if (masterDataService) {
       app.use('/api', masterDataRoutes(authService, config, masterDataService));
     }
     if (demandService) {
       app.use('/api', demandRoutes(authService, config, demandService));
+    }
+    if (purchaseOrderService) {
+      app.use('/api', purchaseOrderRoutes(authService, config, purchaseOrderService));
     }
   }
   for (const router of extraRouters) app.use('/api', router);

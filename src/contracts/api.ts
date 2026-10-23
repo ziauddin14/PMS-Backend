@@ -364,3 +364,238 @@ export const demandListResponseSchema = z.object({
   total: z.number().int(),
 });
 export type DemandListResponse = z.infer<typeof demandListResponseSchema>;
+
+/**
+ * Purchase Order Management (M6).
+ * POs manage vendor purchasing, delivery routes (warehouse or direct), approved amounts,
+ * payment schedules, and one complete invoice per PO.
+ */
+export const deliveryRoutes = ['WAREHOUSE', 'DIRECT'] as const;
+export type DeliveryRoute = (typeof deliveryRoutes)[number];
+export const deliveryRouteSchema = z.enum(deliveryRoutes);
+
+export const poCompletionStatuses = ['PENDING', 'PARTIAL', 'COMPLETE'] as const;
+export type PoCompletionStatus = (typeof poCompletionStatuses)[number];
+export const poCompletionStatusSchema = z.enum(poCompletionStatuses);
+
+export const paymentScheduleEntryInputSchema = z
+  .object({
+    entryNo: z.number().int().min(1).optional(),
+    dueDate: dateOnlySchema,
+    plannedAmount: z
+      .number({ message: 'Planned amount is required' })
+      .positive({ message: 'Planned amount must be greater than 0' }),
+    note: optionalText(200, 'Schedule note'),
+  })
+  .strict();
+export type PaymentScheduleEntryInput = z.infer<typeof paymentScheduleEntryInputSchema>;
+
+export const invoiceInputSchema = z
+  .object({
+    invoiceNo: optionalText(50, 'Invoice number'),
+    invoiceDate: dateOnlySchema.nullable().optional(),
+    invoiceAmount: z
+      .number()
+      .min(0, { message: 'Invoice amount cannot be negative' })
+      .nullable()
+      .optional(),
+    notes: optionalText(500, 'Invoice notes'),
+  })
+  .strict();
+export type InvoiceInput = z.infer<typeof invoiceInputSchema>;
+
+export const purchaseOrderLineInputSchema = z
+  .object({
+    id: objectIdStringSchema.optional(),
+    itemId: objectIdStringSchema,
+    demandId: objectIdStringSchema.nullable().optional(),
+    demandLineId: objectIdStringSchema.nullable().optional(),
+    quantityOrdered: z
+      .number({ message: 'Quantity is required' })
+      .int({ message: 'Quantity must be a whole number' })
+      .min(1, { message: 'Quantity must be at least 1' })
+      .max(10_000_000, { message: 'Quantity is too large' }),
+    unitPrice: z
+      .number({ message: 'Unit price is required' })
+      .min(0, { message: 'Unit price cannot be negative' }),
+    notes: optionalText(500, 'Line note'),
+  })
+  .strict();
+export type PurchaseOrderLineInput = z.infer<typeof purchaseOrderLineInputSchema>;
+
+const poLinesSchema = z
+  .array(purchaseOrderLineInputSchema)
+  .min(1, { message: 'Add at least one line' })
+  .max(200, { message: 'A purchase order can have at most 200 lines' });
+
+export const purchaseOrderCreateSchema = z
+  .object({
+    poNumber: z
+      .string({ message: 'PO number is required' })
+      .trim()
+      .min(1, { message: 'PO number is required' })
+      .max(50, { message: 'PO number must be at most 50 characters' })
+      .refine((val) => !/\p{Cc}/u.test(val), { message: 'PO number contains invalid characters' }),
+    poDate: dateOnlySchema,
+    vendorId: objectIdStringSchema,
+    deliveryRoute: deliveryRouteSchema,
+    targetWarehouseId: objectIdStringSchema.nullable().optional(),
+    destinationDivisionId: objectIdStringSchema.nullable().optional(),
+    approvedAmount: z
+      .number({ message: 'Approved amount is required' })
+      .min(0, { message: 'Approved amount cannot be negative' }),
+    expectedCompletionDate: dateOnlySchema.nullable().optional(),
+    notes: optionalText(1000, 'Notes'),
+    invoice: invoiceInputSchema.nullable().optional(),
+    paymentSchedule: z.array(paymentScheduleEntryInputSchema).optional().default([]),
+    lines: poLinesSchema,
+  })
+  .strict();
+export type PurchaseOrderCreateInput = z.infer<typeof purchaseOrderCreateSchema>;
+
+export const purchaseOrderUpdateSchema = z
+  .object({
+    rev: z.number({ message: 'rev is required' }).int().min(1),
+    poNumber: z
+      .string()
+      .trim()
+      .min(1, { message: 'PO number is required' })
+      .max(50, { message: 'PO number must be at most 50 characters' })
+      .refine((val) => !/\p{Cc}/u.test(val), { message: 'PO number contains invalid characters' })
+      .optional(),
+    poDate: dateOnlySchema.optional(),
+    vendorId: objectIdStringSchema.optional(),
+    deliveryRoute: deliveryRouteSchema.optional(),
+    targetWarehouseId: objectIdStringSchema.nullable().optional(),
+    destinationDivisionId: objectIdStringSchema.nullable().optional(),
+    approvedAmount: z.number().min(0, { message: 'Approved amount cannot be negative' }).optional(),
+    expectedCompletionDate: dateOnlySchema.nullable().optional(),
+    notes: optionalText(1000, 'Notes'),
+    invoice: invoiceInputSchema.nullable().optional(),
+    paymentSchedule: z.array(paymentScheduleEntryInputSchema).optional(),
+    lines: poLinesSchema.optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).some((key) => key !== 'rev'), { message: 'Nothing to update' });
+export type PurchaseOrderUpdateInput = z.infer<typeof purchaseOrderUpdateSchema>;
+
+export const purchaseOrderCancelSchema = z
+  .object({
+    rev: z.number({ message: 'rev is required' }).int().min(1),
+    reason: z
+      .string({ message: 'Reason is required' })
+      .trim()
+      .min(1, { message: 'Reason is required' })
+      .max(500, { message: 'Reason must be at most 500 characters' }),
+  })
+  .strict();
+export type PurchaseOrderCancelInput = z.infer<typeof purchaseOrderCancelSchema>;
+
+export const purchaseOrderSorts = [
+  'poDate_desc',
+  'poDate_asc',
+  'code_desc',
+  'code_asc',
+  'poNumber_desc',
+  'poNumber_asc',
+] as const;
+export type PurchaseOrderSort = (typeof purchaseOrderSorts)[number];
+
+export const purchaseOrderListQuerySchema = z
+  .object({
+    search: z.string().trim().max(100).optional(),
+    status: z.enum(['open', 'cancelled', 'all']).default('open'),
+    vendorId: objectIdStringSchema.optional(),
+    deliveryRoute: deliveryRouteSchema.optional(),
+    from: dateOnlySchema.optional(),
+    to: dateOnlySchema.optional(),
+    sort: z.enum(purchaseOrderSorts).default('poDate_desc'),
+    page: z.coerce.number().int().min(1).max(10000).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  })
+  .strict()
+  .refine((v) => !v.from || !v.to || v.from <= v.to, {
+    message: '"from" must not be after "to"',
+    path: ['from'],
+  });
+export type PurchaseOrderListQuery = z.infer<typeof purchaseOrderListQuerySchema>;
+
+export const paymentScheduleEntrySchema = z.object({
+  entryNo: z.number().int(),
+  dueDate: z.string(),
+  plannedAmount: z.number(),
+  note: z.string().nullable(),
+});
+export type PaymentScheduleEntry = z.infer<typeof paymentScheduleEntrySchema>;
+
+export const invoiceMetaSchema = z.object({
+  invoiceNo: z.string().nullable(),
+  invoiceDate: z.string().nullable(),
+  invoiceAmount: z.number().nullable(),
+  notes: z.string().nullable(),
+});
+export type InvoiceMeta = z.infer<typeof invoiceMetaSchema>;
+
+export const poDemandRefSchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  demandDate: z.string(),
+  lineNo: z.number().int().nullable(),
+});
+export type PoDemandRef = z.infer<typeof poDemandRefSchema>;
+
+export const purchaseOrderLineSchema = z.object({
+  id: z.string(),
+  lineNo: z.number().int(),
+  item: masterRefSchema,
+  demand: poDemandRefSchema.nullable(),
+  quantityOrdered: z.number().int(),
+  quantityReceived: z.number().int(),
+  quantityRemaining: z.number().int(),
+  unitPrice: z.number(),
+  lineTotal: z.number(),
+  notes: z.string().nullable(),
+  completion: poCompletionStatusSchema,
+});
+export type PurchaseOrderLine = z.infer<typeof purchaseOrderLineSchema>;
+
+export const purchaseOrderSummarySchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  poNumber: z.string(),
+  poDate: z.string(),
+  status: z.enum(['OPEN', 'CANCELLED']),
+  completion: poCompletionStatusSchema,
+  vendor: masterRefSchema,
+  deliveryRoute: deliveryRouteSchema,
+  targetWarehouse: masterRefSchema.nullable(),
+  destinationDivision: masterRefSchema.extend({ provinceName: z.string().nullable() }).nullable(),
+  approvedAmount: z.number(),
+  totalAmount: z.number(),
+  lineCount: z.number().int(),
+  totalQuantity: z.number().int(),
+  expectedCompletionDate: z.string().nullable(),
+  rev: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type PurchaseOrderSummary = z.infer<typeof purchaseOrderSummarySchema>;
+
+export const purchaseOrderDetailSchema = purchaseOrderSummarySchema.extend({
+  notes: z.string().nullable(),
+  invoice: invoiceMetaSchema.nullable(),
+  paymentSchedule: z.array(paymentScheduleEntrySchema),
+  lines: z.array(purchaseOrderLineSchema),
+  cancellation: z
+    .object({ at: z.string(), reason: z.string(), by: z.string().nullable() })
+    .nullable(),
+});
+export type PurchaseOrderDetail = z.infer<typeof purchaseOrderDetailSchema>;
+
+export const purchaseOrderListResponseSchema = z.object({
+  items: z.array(purchaseOrderSummarySchema),
+  page: z.number().int(),
+  pageSize: z.number().int(),
+  total: z.number().int(),
+});
+export type PurchaseOrderListResponse = z.infer<typeof purchaseOrderListResponseSchema>;

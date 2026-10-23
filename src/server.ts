@@ -10,6 +10,8 @@ import { MasterDataService } from './masterData/masterDataService.js';
 import { RecordStore } from './records/recordStore.js';
 import { ensureDemandCollections } from './demands/definitions.js';
 import { DemandService } from './demands/demandService.js';
+import { ensurePurchaseOrderCollections } from './purchaseOrders/definitions.js';
+import { PurchaseOrderService } from './purchaseOrders/purchaseOrderService.js';
 
 async function main(): Promise<void> {
   let config;
@@ -31,6 +33,7 @@ async function main(): Promise<void> {
     await ensureAuthCollections(database.db);
     await ensureMasterDataCollections(database.db);
     await ensureDemandCollections(database.db);
+    await ensurePurchaseOrderCollections(database.db);
   } catch (error) {
     const message =
       error instanceof DatabaseConnectionError ? error.message : 'Database initialisation failed';
@@ -42,6 +45,7 @@ async function main(): Promise<void> {
   const store = new RecordStore(database);
   const masterDataService = new MasterDataService(database, store);
   const demandService = new DemandService(database, store);
+  const purchaseOrderService = new PurchaseOrderService(database, store);
   const app = createApp({
     config,
     logger,
@@ -49,6 +53,7 @@ async function main(): Promise<void> {
     authService,
     masterDataService,
     demandService,
+    purchaseOrderService,
   });
   const server = app.listen(config.port, config.host, () => {
     logger.info({ host: config.host, port: config.port, env: config.nodeEnv }, 'API listening');
