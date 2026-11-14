@@ -12,6 +12,7 @@ import { ensureDemandCollections } from './demands/definitions.js';
 import { DemandService } from './demands/demandService.js';
 import { ensurePurchaseOrderCollections } from './purchaseOrders/definitions.js';
 import { PurchaseOrderService } from './purchaseOrders/purchaseOrderService.js';
+import { createOperations, ensureOperationsCollections } from './operations.js';
 
 async function main(): Promise<void> {
   let config;
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
     await ensureMasterDataCollections(database.db);
     await ensureDemandCollections(database.db);
     await ensurePurchaseOrderCollections(database.db);
+    await ensureOperationsCollections(database.db);
   } catch (error) {
     const message =
       error instanceof DatabaseConnectionError ? error.message : 'Database initialisation failed';
@@ -54,6 +56,7 @@ async function main(): Promise<void> {
     masterDataService,
     demandService,
     purchaseOrderService,
+    operations: createOperations(database, store),
   });
   const server = app.listen(config.port, config.host, () => {
     logger.info({ host: config.host, port: config.port, env: config.nodeEnv }, 'API listening');
