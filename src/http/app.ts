@@ -14,6 +14,7 @@ import type { DemandService } from '../demands/demandService.js';
 import { demandRoutes } from './demandRoutes.js';
 import type { PurchaseOrderService } from '../purchaseOrders/purchaseOrderService.js';
 import { purchaseOrderRoutes } from './purchaseOrderRoutes.js';
+import { operationsRoutes, type OperationsServices } from './operationsRoutes.js';
 import {
   errorHandler,
   notFoundHandler,
@@ -34,6 +35,8 @@ export interface AppDependencies {
   demandService?: DemandService;
   /** Purchase order service; mounted only together with the auth service. */
   purchaseOrderService?: PurchaseOrderService;
+  /** M7–M11 services (receiving, stock, dispatch, payments, sync status, reports). */
+  operations?: OperationsServices;
   /** Extra routers mounted under `/api` (used by tests; business routes arrive in later milestones). */
   extraRouters?: Router[];
 }
@@ -46,6 +49,7 @@ export function createApp({
   masterDataService,
   demandService,
   purchaseOrderService,
+  operations,
   extraRouters = [],
 }: AppDependencies): Express {
   const app = express();
@@ -76,7 +80,18 @@ export function createApp({
       dashboardRoutes(authService, config, database, {
         ...(demandService ? { openDemands: () => demandService.countOpenLines() } : {}),
         ...(purchaseOrderService
-          ? { activePurchaseOrders: () => purchaseOrderService.countActiveOrders() }
+          ? {
+              activePurchaseOrders: () => purchaseOrderService.countActiveOrders(),
+              ...(operations
+                ? { outstandingVendorPayments: () => purchaseOrderService.outstandingPayments() }
+                : {}),
+            }
+          : {}),
+        ...(operations
+          ? {
+              stockLots: () => operations.stock.warehouseUnits(),
+              dispatchesThisMonth: () => operations.dispatches.countThisMonth(),
+            }
           : {}),
       }),
     );
@@ -88,6 +103,9 @@ export function createApp({
     }
     if (purchaseOrderService) {
       app.use('/api', purchaseOrderRoutes(authService, config, purchaseOrderService));
+    }
+    if (operations) {
+      app.use('/api', operationsRoutes(authService, config, operations));
     }
   }
   for (const router of extraRouters) app.use('/api', router);

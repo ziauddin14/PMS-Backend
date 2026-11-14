@@ -1,4 +1,5 @@
 import { ObjectId, type Collection, type Filter, type Sort } from 'mongodb';
+import { readTallies, tallyKey } from '../inventory/ledger.js';
 import type {
   DemandCancelInput,
   DemandCreateInput,
@@ -50,8 +51,8 @@ interface ViewOptions {
 /**
  * Demand management (M5). All writes go through the M2 RecordStore (validation, Demand Number,
  * revision checks, audit, queued sync jobs). Cancellation archives the demand with a reason (D9);
- * nothing is deleted. Fulfilment is derived from dispatch lines, which arrive in M8 — until then
- * every line has quantityDelivered = 0 and is PENDING.
+ * nothing is deleted. Fulfilment (delivered/remaining) is derived from M8 dispatch lines linked to
+ * each demand line.
  */
 export class DemandService {
   constructor(
@@ -102,9 +103,9 @@ export class DemandService {
         .toArray(),
       this.demands.countDocuments(filter),
     ]);
-    const refs = await this.loadRefs(docs);
+    const [refs, delivered] = await Promise.all([this.loadRefs(docs), this.loadDelivered(docs)]);
     return {
-      items: docs.map((doc) => this.toSummary(doc, refs)),
+      items: docs.map((doc) => this.toSummary(doc, refs, delivered)),
       page: query.page,
       pageSize: query.pageSize,
       total,
@@ -113,7 +114,7 @@ export class DemandService {
 
   async get(id: string, view: ViewOptions): Promise<DemandDetail> {
     const doc = await this.findOrThrow(id);
-    return this.toDetail(doc, await this.loadRefs([doc]), view);
+    return this.toDetail(doc, await this.loadRefs([doc]), view, await this.loadDelivered([doc]));
   }
 
   async create(input: DemandCreateInput, ctx: MutationContext): Promise<DemandDetail> {
@@ -180,6 +181,31 @@ export class DemandService {
     }
     if (input.lines !== undefined) {
       const built = await this.buildLines(input.lines, current, errors);
+      const delivered = await this.loadDelivered([current]);
+      for (const line of current.lines) {
+        const done = delivered.get(line._id.toHexString()) ?? 0;
+        if (done === 0) continue;
+        const kept = built.lines.find((l) => l._id.equals(line._id));
+        if (!kept) {
+          errors.push({
+            path: 'lines',
+            message: `Line ${line.lineNo} has dispatches and cannot be removed`,
+          });
+        } else if (
+          !kept.itemId.equals(line.itemId) ||
+          !kept.destinationDivisionId.equals(line.destinationDivisionId)
+        ) {
+          errors.push({
+            path: 'lines',
+            message: `Line ${line.lineNo} has dispatches; its item and destination cannot change`,
+          });
+        } else if (kept.quantity < done) {
+          errors.push({
+            path: 'lines',
+            message: `Line ${line.lineNo} quantity cannot be below the ${done} unit(s) already dispatched`,
+          });
+        }
+      }
       changes.lines = built.lines;
       changes.nextLineNo = built.nextLineNo;
     }
@@ -192,7 +218,12 @@ export class DemandService {
       changes,
       ctx,
     )) as DemandDoc;
-    return this.toDetail(updated, await this.loadRefs([updated]), { includePersonalData: true });
+    return this.toDetail(
+      updated,
+      await this.loadRefs([updated]),
+      { includePersonalData: true },
+      await this.loadDelivered([updated]),
+    );
   }
 
   /** Cancels a demand with a reason (D9). The record is kept and stays readable. */
@@ -200,6 +231,12 @@ export class DemandService {
     const current = await this.findOrThrow(id);
     if (current.lifecycle.state !== 'ACTIVE') {
       throw new ConflictError('This demand is already cancelled');
+    }
+    const delivered = await this.loadDelivered([current]);
+    if ([...delivered.values()].some((value) => value > 0)) {
+      throw new ConflictError(
+        'Goods have been dispatched against this demand; cancel those dispatches before cancelling the demand',
+      );
     }
     const cancelled = (await this.store.archive(
       demandDefinition,
@@ -215,14 +252,25 @@ export class DemandService {
 
   /** Lines of open demands that still have a remaining quantity (dashboard indicator). */
   async countOpenLines(): Promise<number> {
-    const [result] = await this.demands
-      .aggregate<{ total: number }>([
-        { $match: { 'lifecycle.state': 'ACTIVE' } },
-        { $group: { _id: null, total: { $sum: { $size: '$lines' } } } },
-      ])
+    const docs = await this.demands
+      .find({ 'lifecycle.state': 'ACTIVE' }, { projection: { lines: 1 } })
       .toArray();
-    // No dispatches exist before M8, so every line of an open demand is still open.
-    return result?.total ?? 0;
+    const delivered = await this.loadDelivered(docs);
+    return docs
+      .flatMap((doc) => doc.lines)
+      .filter((line) => (delivered.get(line._id.toHexString()) ?? 0) < line.quantity).length;
+  }
+
+  /** Units dispatched per demand line id (M8 guarded tallies). */
+  async loadDelivered(docs: Array<Pick<DemandDoc, 'lines'>>): Promise<Map<string, number>> {
+    const lines = docs.flatMap((doc) => doc.lines);
+    const values = await readTallies(
+      this.database.db,
+      lines.map((line) => tallyKey.dispatched(line._id)),
+    );
+    return new Map(
+      lines.map((line) => [line._id.toHexString(), values.get(tallyKey.dispatched(line._id)) ?? 0]),
+    );
   }
 
   // ---- validation helpers ----
@@ -371,8 +419,7 @@ export class DemandService {
         receiverPhone: input.receiverPhone ?? null,
       });
     }
-    // Removing a line is allowed while no dispatch references it; dispatches arrive in M8, which
-    // must then block removal of lines that have dispatches.
+    // Lines with dispatches are protected in update() (cannot be removed, re-pointed or reduced).
     return { lines, nextLineNo };
   }
 
@@ -422,13 +469,24 @@ export class DemandService {
     return result;
   }
 
-  private toSummary(doc: DemandDoc, refs: Record<string, RefDocs>): DemandSummary {
+  private toSummary(
+    doc: DemandDoc,
+    refs: Record<string, RefDocs>,
+    delivered: Map<string, number> = new Map(),
+  ): DemandSummary {
+    const states = doc.lines.map((line) =>
+      fulfilmentOf(line.quantity, delivered.get(line._id.toHexString()) ?? 0),
+    );
     return {
       id: doc._id.toHexString(),
       code: doc.code,
       demandDate: doc.demandDate,
       status: doc.lifecycle.state === 'ACTIVE' ? 'OPEN' : 'CANCELLED',
-      fulfilment: 'PENDING',
+      fulfilment: states.every((st) => st === 'DELIVERED')
+        ? 'DELIVERED'
+        : states.every((st) => st === 'PENDING')
+          ? 'PENDING'
+          : 'PARTIAL',
       department: refOf(refs.departments, doc.departmentId),
       province: refOf(refs.provinces, doc.provinceId),
       division: doc.divisionId ? refOf(refs.divisions, doc.divisionId) : null,
@@ -441,10 +499,15 @@ export class DemandService {
     };
   }
 
-  private toDetail(doc: DemandDoc, refs: Record<string, RefDocs>, view: ViewOptions): DemandDetail {
+  private toDetail(
+    doc: DemandDoc,
+    refs: Record<string, RefDocs>,
+    view: ViewOptions,
+    delivered: Map<string, number> = new Map(),
+  ): DemandDetail {
     const lifecycle = doc.lifecycle;
     return {
-      ...this.toSummary(doc, refs),
+      ...this.toSummary(doc, refs, delivered),
       lines: [...doc.lines]
         .sort((a, b) => a.lineNo - b.lineNo)
         .map((line) => {
@@ -452,7 +515,7 @@ export class DemandService {
           const provinceName = destination?.provinceId
             ? (refs.provinces?.get(destination.provinceId.toHexString())?.name ?? null)
             : null;
-          const quantityDelivered = 0; // From dispatch lines in M8.
+          const quantityDelivered = delivered.get(line._id.toHexString()) ?? 0;
           return {
             id: line._id.toHexString(),
             lineNo: line.lineNo,
@@ -464,7 +527,7 @@ export class DemandService {
             quantity: line.quantity,
             quantityDelivered,
             quantityRemaining: line.quantity - quantityDelivered,
-            fulfilment: 'PENDING' as const,
+            fulfilment: fulfilmentOf(line.quantity, quantityDelivered),
             ...(view.includePersonalData
               ? { receiverName: line.receiverName, receiverPhone: line.receiverPhone }
               : {}),
@@ -491,4 +554,9 @@ function refOf(map: RefDocs | undefined, id: ObjectId): MasterRef {
   const doc = map?.get(id.toHexString());
   if (!doc) return { id: id.toHexString(), code: '', name: '(missing record)', active: false };
   return { id: doc._id.toHexString(), code: doc.code, name: doc.name, active: doc.active };
+}
+
+function fulfilmentOf(quantity: number, delivered: number): 'PENDING' | 'PARTIAL' | 'DELIVERED' {
+  if (delivered <= 0) return 'PENDING';
+  return delivered >= quantity ? 'DELIVERED' : 'PARTIAL';
 }

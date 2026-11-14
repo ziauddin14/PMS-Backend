@@ -19,6 +19,7 @@ import type { MasterRecordDoc } from '../masterData/definitions.js';
 import type { RecordStore } from '../records/recordStore.js';
 import { DEMANDS_COLLECTION, type DemandDoc } from '../demands/definitions.js';
 import { todayInKarachi } from '../demands/demandService.js';
+import { readTallies, tallyKey, toCents } from '../inventory/ledger.js';
 import {
   PURCHASE_ORDERS_COLLECTION,
   purchaseOrderDefinition,
@@ -56,13 +57,20 @@ function searchTextOf(poNumber: string, notes?: string | null, invoiceNo?: strin
 
 type RefDocs = Map<string, MasterRecordDoc>;
 type DemandDocs = Map<string, DemandDoc>;
+/** Received units per PO line id and paid cents per PO id (from the M7/M9 tallies). */
+interface Progress {
+  received: Map<string, number>;
+  paidCents: Map<string, number>;
+}
 
 /**
  * Purchase Order & Vendor Management (M6).
  * Manages PO lifecycle, delivery routes (warehouse vs direct), vendor references,
  * approved amounts, planned payment schedules, and one complete invoice per PO.
- * Completion is derived from vendor receipts (M7) — until then every line has
- * quantityReceived = 0 and is PENDING.
+ * Completion is derived from vendor receipts (M7): a line is COMPLETE when its received quantity
+ * reaches the ordered quantity. Payment status (M9) is derived separately from actual payments and
+ * never affects completion. Lines, routes and amounts already covered by receipts or payments are
+ * protected from edits that would contradict them.
  */
 export class PurchaseOrderService {
   constructor(
@@ -119,9 +127,9 @@ export class PurchaseOrderService {
         .toArray(),
       this.purchaseOrders.countDocuments(filter),
     ]);
-    const refs = await this.loadRefs(docs);
+    const [refs, progress] = await Promise.all([this.loadRefs(docs), this.loadProgress(docs)]);
     return {
-      items: docs.map((doc) => this.toSummary(doc, refs)),
+      items: docs.map((doc) => this.toSummary(doc, refs, progress)),
       page: query.page,
       pageSize: query.pageSize,
       total,
@@ -130,8 +138,7 @@ export class PurchaseOrderService {
 
   async get(id: string): Promise<PurchaseOrderDetail> {
     const doc = await this.findOrThrow(id);
-    const [refs, demandDocs] = await Promise.all([this.loadRefs([doc]), this.loadDemands([doc])]);
-    return this.toDetail(doc, refs, demandDocs);
+    return this.detailOf(doc);
   }
 
   async create(
@@ -203,11 +210,7 @@ export class PurchaseOrderService {
       }
       throw error;
     }
-    const [refs, demandDocs] = await Promise.all([
-      this.loadRefs([created]),
-      this.loadDemands([created]),
-    ]);
-    return this.toDetail(created, refs, demandDocs);
+    return this.detailOf(created);
   }
 
   async update(
@@ -221,6 +224,10 @@ export class PurchaseOrderService {
     }
     const errors: ErrorDetail[] = [];
     const changes: Partial<PurchaseOrderFields> = {};
+    const progress = await this.loadProgress([current]);
+    const receivedOf = (lineId: ObjectId) => progress.received.get(lineId.toHexString()) ?? 0;
+    const anyReceived = current.lines.some((line) => receivedOf(line._id) > 0);
+    const paidCents = progress.paidCents.get(current._id.toHexString()) ?? 0;
 
     let poNumber = current.poNumber;
     if (input.poNumber !== undefined) {
@@ -270,6 +277,17 @@ export class PurchaseOrderService {
         input.destinationDivisionId === undefined
           ? (current.destinationDivisionId?.toHexString() ?? null)
           : input.destinationDivisionId;
+      const routeChanged =
+        route !== current.deliveryRoute ||
+        (targetWh ?? null) !== (current.targetWarehouseId?.toHexString() ?? null) ||
+        (destDiv ?? null) !== (current.destinationDivisionId?.toHexString() ?? null);
+      if (routeChanged && anyReceived) {
+        errors.push({
+          path: 'deliveryRoute',
+          message:
+            'Goods have already been received at the current location; the route cannot change',
+        });
+      }
       const routeData = await this.resolveRouteData(route, targetWh, destDiv, current, errors);
       changes.deliveryRoute = route;
       changes.targetWarehouseId = routeData.targetWarehouseId;
@@ -277,6 +295,12 @@ export class PurchaseOrderService {
     }
 
     if (input.approvedAmount !== undefined) {
+      if (toCents(input.approvedAmount) < paidCents) {
+        errors.push({
+          path: 'approvedAmount',
+          message: `Approved amount cannot be below the amount already paid (${(paidCents / 100).toFixed(2)})`,
+        });
+      }
       changes.approvedAmount = input.approvedAmount;
     }
 
@@ -296,6 +320,27 @@ export class PurchaseOrderService {
 
     if (input.lines !== undefined) {
       const built = await this.buildLines(input.lines, current, errors);
+      for (const line of current.lines) {
+        const received = receivedOf(line._id);
+        if (received === 0) continue;
+        const kept = built.lines.find((l) => l._id.equals(line._id));
+        if (!kept) {
+          errors.push({
+            path: 'lines',
+            message: `Line ${line.lineNo} has received goods and cannot be removed`,
+          });
+        } else if (!kept.itemId.equals(line.itemId)) {
+          errors.push({
+            path: 'lines',
+            message: `Line ${line.lineNo} has received goods; its item cannot change`,
+          });
+        } else if (kept.quantityOrdered < received) {
+          errors.push({
+            path: 'lines',
+            message: `Line ${line.lineNo} quantity cannot be below the ${received} unit(s) already received`,
+          });
+        }
+      }
       changes.lines = built.lines;
       changes.nextLineNo = built.nextLineNo;
       changes.totalAmount = built.lines.reduce((sum, l) => sum + l.lineTotal, 0);
@@ -326,11 +371,7 @@ export class PurchaseOrderService {
       }
       throw error;
     }
-    const [refs, demandDocs] = await Promise.all([
-      this.loadRefs([updated]),
-      this.loadDemands([updated]),
-    ]);
-    return this.toDetail(updated, refs, demandDocs);
+    return this.detailOf(updated);
   }
 
   async cancel(
@@ -342,6 +383,17 @@ export class PurchaseOrderService {
     if (current.lifecycle.state === 'ARCHIVED') {
       throw new ConflictError('This purchase order is already cancelled');
     }
+    const progress = await this.loadProgress([current]);
+    if (current.lines.some((line) => (progress.received.get(line._id.toHexString()) ?? 0) > 0)) {
+      throw new ConflictError(
+        'Goods have been received against this purchase order; cancel its receipts before cancelling the PO',
+      );
+    }
+    if ((progress.paidCents.get(current._id.toHexString()) ?? 0) > 0) {
+      throw new ConflictError(
+        'Payments have been recorded against this purchase order; cancel them before cancelling the PO',
+      );
+    }
     const cancelled = (await this.store.archive(
       purchaseOrderDefinition,
       current._id,
@@ -349,11 +401,7 @@ export class PurchaseOrderService {
       input.reason,
       ctx,
     )) as PurchaseOrderDoc;
-    const [refs, demandDocs] = await Promise.all([
-      this.loadRefs([cancelled]),
-      this.loadDemands([cancelled]),
-    ]);
-    return this.toDetail(cancelled, refs, demandDocs);
+    return this.detailOf(cancelled);
   }
 
   /**
@@ -361,7 +409,54 @@ export class PurchaseOrderService {
    * Feeds the dashboard indicator (M6).
    */
   async countActiveOrders(): Promise<number> {
-    return this.purchaseOrders.countDocuments({ 'lifecycle.state': 'ACTIVE' });
+    const docs = await this.purchaseOrders
+      .find({ 'lifecycle.state': 'ACTIVE' }, { projection: { lines: 1 } })
+      .toArray();
+    const progress = await this.loadProgress(docs);
+    return docs.filter((doc) => completionOf(doc, progress) !== 'COMPLETE').length;
+  }
+
+  /** Sum of approved amounts not yet paid, over open POs (dashboard indicator, M9). */
+  async outstandingPayments(): Promise<number> {
+    const docs = await this.purchaseOrders
+      .find({ 'lifecycle.state': 'ACTIVE' }, { projection: { approvedAmount: 1, lines: 1 } })
+      .toArray();
+    const progress = await this.loadProgress(docs);
+    const cents = docs.reduce(
+      (sum, doc) =>
+        sum +
+        Math.max(
+          0,
+          toCents(doc.approvedAmount) - (progress.paidCents.get(doc._id.toHexString()) ?? 0),
+        ),
+      0,
+    );
+    return cents / 100;
+  }
+
+  /** Received units per line and paid cents per PO, read from the guarded tallies. */
+  async loadProgress(docs: Array<Pick<PurchaseOrderDoc, '_id' | 'lines'>>): Promise<Progress> {
+    const lineKeys = docs.flatMap((doc) => doc.lines.map((line) => tallyKey.received(line._id)));
+    const payKeys = docs.map((doc) => tallyKey.paidCents(doc._id));
+    const values = await readTallies(this.database.db, [...lineKeys, ...payKeys]);
+    const received = new Map<string, number>();
+    const paidCents = new Map<string, number>();
+    for (const doc of docs) {
+      paidCents.set(doc._id.toHexString(), values.get(tallyKey.paidCents(doc._id)) ?? 0);
+      for (const line of doc.lines) {
+        received.set(line._id.toHexString(), values.get(tallyKey.received(line._id)) ?? 0);
+      }
+    }
+    return { received, paidCents };
+  }
+
+  private async detailOf(doc: PurchaseOrderDoc): Promise<PurchaseOrderDetail> {
+    const [refs, demandDocs, progress] = await Promise.all([
+      this.loadRefs([doc]),
+      this.loadDemands([doc]),
+      this.loadProgress([doc]),
+    ]);
+    return this.toDetail(doc, refs, demandDocs, progress);
   }
 
   // ---- Private validation & helper methods ----
@@ -704,7 +799,14 @@ export class PurchaseOrderService {
       provinces: RefDocs;
       items: RefDocs;
     },
+    progress: Progress,
   ): PurchaseOrderSummary {
+    const totalReceived = doc.lines.reduce(
+      (sum, l) => sum + (progress.received.get(l._id.toHexString()) ?? 0),
+      0,
+    );
+    const approvedCents = toCents(doc.approvedAmount);
+    const paidCents = progress.paidCents.get(doc._id.toHexString()) ?? 0;
     const divDoc = doc.destinationDivisionId
       ? refs.divisions.get(doc.destinationDivisionId.toHexString())
       : null;
@@ -716,7 +818,7 @@ export class PurchaseOrderService {
       poNumber: doc.poNumber,
       poDate: doc.poDate,
       status: doc.lifecycle.state === 'ACTIVE' ? 'OPEN' : 'CANCELLED',
-      completion: 'PENDING', // derived from vendor receipts (M7)
+      completion: completionOf(doc, progress),
       vendor: refOf(refs.vendors, doc.vendorId),
       deliveryRoute: doc.deliveryRoute,
       targetWarehouse: doc.targetWarehouseId ? refOf(refs.warehouses, doc.targetWarehouseId) : null,
@@ -733,6 +835,10 @@ export class PurchaseOrderService {
       totalAmount: doc.totalAmount,
       lineCount: doc.lines.length,
       totalQuantity: doc.lines.reduce((sum, l) => sum + l.quantityOrdered, 0),
+      totalReceived,
+      paidAmount: paidCents / 100,
+      outstandingAmount: Math.max(0, approvedCents - paidCents) / 100,
+      paymentStatus: paidCents === 0 ? 'UNPAID' : paidCents >= approvedCents ? 'PAID' : 'PARTIAL',
       expectedCompletionDate: doc.expectedCompletionDate ?? null,
       rev: doc.rev,
       createdAt: doc.createdAt.toISOString(),
@@ -750,8 +856,9 @@ export class PurchaseOrderService {
       items: RefDocs;
     },
     demandDocs: DemandDocs,
+    progress: Progress,
   ): PurchaseOrderDetail {
-    const summary = this.toSummary(doc, refs);
+    const summary = this.toSummary(doc, refs, progress);
     const { lifecycle } = doc;
 
     const lines: PurchaseOrderLine[] = doc.lines.map((line) => {
@@ -782,12 +889,16 @@ export class PurchaseOrderService {
         item: refOf(refs.items, line.itemId),
         demand: demandRef,
         quantityOrdered: line.quantityOrdered,
-        quantityReceived: 0, // vendor receipts arrive in M7
-        quantityRemaining: line.quantityOrdered,
+        quantityReceived: progress.received.get(line._id.toHexString()) ?? 0,
+        quantityRemaining:
+          line.quantityOrdered - (progress.received.get(line._id.toHexString()) ?? 0),
         unitPrice: line.unitPrice,
         lineTotal: line.lineTotal,
         notes: line.notes ?? null,
-        completion: 'PENDING',
+        completion: lineCompletion(
+          line.quantityOrdered,
+          progress.received.get(line._id.toHexString()) ?? 0,
+        ),
       };
     });
 
@@ -825,4 +936,22 @@ function refOf(map: RefDocs | undefined, id: ObjectId): MasterRef {
   const doc = map?.get(id.toHexString());
   if (!doc) return { id: id.toHexString(), code: '', name: '(missing record)', active: false };
   return { id: doc._id.toHexString(), code: doc.code, name: doc.name, active: doc.active };
+}
+
+function lineCompletion(ordered: number, received: number): 'PENDING' | 'PARTIAL' | 'COMPLETE' {
+  if (received <= 0) return 'PENDING';
+  return received >= ordered ? 'COMPLETE' : 'PARTIAL';
+}
+
+/** PO completion = all required vendor goods received (M1 rule 2); dispatch plays no part. */
+function completionOf(
+  doc: Pick<PurchaseOrderDoc, 'lines'>,
+  progress: Progress,
+): 'PENDING' | 'PARTIAL' | 'COMPLETE' {
+  const states = doc.lines.map((line) =>
+    lineCompletion(line.quantityOrdered, progress.received.get(line._id.toHexString()) ?? 0),
+  );
+  if (states.every((state) => state === 'COMPLETE')) return 'COMPLETE';
+  if (states.every((state) => state === 'PENDING')) return 'PENDING';
+  return 'PARTIAL';
 }

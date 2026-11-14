@@ -30,6 +30,17 @@ export interface RecordDefinition<TCreate extends Document, TUpdate extends Docu
   auditRedactFields?: string[];
 }
 
+/**
+ * Extra writes that must commit or fail together with the record (stock ledger, quantity
+ * tallies). They run before the record write, inside the same transaction when available, and
+ * may throw an AppError (e.g. ConflictError) to abort the whole operation. In the non-transactional
+ * development fallback they are NOT rolled back if a later step fails.
+ */
+export type SideEffects = (
+  session: ClientSession | undefined,
+  record: { _id: ObjectId; code: string; rev: number },
+) => Promise<void>;
+
 export const AUDIT_REDACTED = '[REDACTED]';
 
 export interface Lifecycle {
@@ -163,6 +174,7 @@ export class RecordStore {
     def: RecordDefinition<TCreate, TUpdate>,
     input: unknown,
     ctx: MutationContext,
+    sideEffects?: SideEffects,
   ): Promise<StoredRecord<TCreate>> {
     const context = parseOrThrow(mutationContextSchema, ctx);
     const data = validatePayload(def.createSchema, input);
@@ -197,6 +209,7 @@ export class RecordStore {
         now,
       },
       async (session) => {
+        if (sideEffects) await sideEffects(session, { _id, code, rev: 1 });
         await this.collection(def.collection).insertOne(record, { session });
       },
     );
@@ -209,6 +222,7 @@ export class RecordStore {
     expectedRev: number,
     changesInput: unknown,
     ctx: MutationContext,
+    sideEffects?: SideEffects,
   ): Promise<StoredRecord<TCreate>> {
     const context = parseOrThrow(mutationContextSchema, ctx);
     const data = validatePayload(def.updateSchema, changesInput);
@@ -245,6 +259,8 @@ export class RecordStore {
         now,
       },
       async (session) => {
+        if (sideEffects)
+          await sideEffects(session, { _id: current._id, code: current.code, rev: revAfter });
         const result = await this.collection(def.collection).updateOne(
           { _id: current._id, rev: expectedRev, 'lifecycle.state': 'ACTIVE' },
           { $set: { ...set, updatedAt: now, updatedBy: context.actor }, $inc: { rev: 1 } },
@@ -269,6 +285,7 @@ export class RecordStore {
     expectedRev: number,
     reason: string,
     ctx: MutationContext,
+    sideEffects?: SideEffects,
   ): Promise<StoredRecord<TCreate>> {
     const context = parseOrThrow(mutationContextSchema, ctx);
     const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
@@ -305,6 +322,8 @@ export class RecordStore {
         now,
       },
       async (session) => {
+        if (sideEffects)
+          await sideEffects(session, { _id: current._id, code: current.code, rev: revAfter });
         const result = await this.collection(def.collection).updateOne(
           { _id: current._id, rev: expectedRev, 'lifecycle.state': 'ACTIVE' },
           { $set: { lifecycle, updatedAt: now, updatedBy: context.actor }, $inc: { rev: 1 } },

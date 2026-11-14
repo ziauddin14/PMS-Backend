@@ -574,6 +574,12 @@ export const purchaseOrderSummarySchema = z.object({
   totalAmount: z.number(),
   lineCount: z.number().int(),
   totalQuantity: z.number().int(),
+  /** Units received from the vendor so far (M7, active receipts only). */
+  totalReceived: z.number().int(),
+  /** Sum of active vendor payments (M9). Independent of completion. */
+  paidAmount: z.number(),
+  outstandingAmount: z.number(),
+  paymentStatus: z.enum(['UNPAID', 'PARTIAL', 'PAID']),
   expectedCompletionDate: z.string().nullable(),
   rev: z.number().int(),
   createdAt: z.string(),
