@@ -117,11 +117,14 @@ export type DashboardSummary = z.infer<typeof dashboardSummarySchema>;
 
 /**
  * Master data (M4). Entities from BRD Module 2 (vendors, items, provinces, divisions,
- * departments) and M1 field mapping (warehouses). Records are deactivated, never deleted.
+ * departments) and M1 field mapping (warehouses), plus districts and cities under divisions
+ * (Province → Division → District → City). Records are deactivated, never deleted.
  */
 export const masterEntityKeys = [
   'provinces',
   'divisions',
+  'districts',
+  'cities',
   'departments',
   'items',
   'vendors',
@@ -148,11 +151,24 @@ export const masterRecordSchema = z.object({
   rev: z.number().int(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  /** Divisions only. */
+  /** Location records: the levels above this record (divisions: province; districts: division
+   * and province; cities: district, division and province). */
   provinceId: z.string().optional(),
   provinceName: z.string().optional(),
+  divisionId: z.string().optional(),
+  divisionName: z.string().optional(),
+  districtId: z.string().optional(),
+  districtName: z.string().optional(),
+  /** Vendors only. */
+  contactPerson: z.string().nullable().optional(),
 });
 export type MasterRecord = z.infer<typeof masterRecordSchema>;
+
+const contactPersonSchema = z
+  .string()
+  .trim()
+  .max(100, { message: 'Contact person must be at most 100 characters' })
+  .refine((value) => !/\p{Cc}/u.test(value), { message: 'Contains invalid characters' });
 
 export const masterListResponseSchema = z.object({
   items: z.array(masterRecordSchema),
@@ -169,12 +185,20 @@ export const masterListQuerySchema = z
     page: z.coerce.number().int().min(1).max(10000).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(25),
     provinceId: objectIdStringSchema.optional(),
+    divisionId: objectIdStringSchema.optional(),
+    districtId: objectIdStringSchema.optional(),
   })
   .strict();
 export type MasterListQuery = z.infer<typeof masterListQuerySchema>;
 
 export const masterCreateSchema = z
-  .object({ name: masterNameSchema, provinceId: objectIdStringSchema.optional() })
+  .object({
+    name: masterNameSchema,
+    provinceId: objectIdStringSchema.optional(),
+    divisionId: objectIdStringSchema.optional(),
+    districtId: objectIdStringSchema.optional(),
+    contactPerson: contactPersonSchema.optional(),
+  })
   .strict();
 export type MasterCreateInput = z.infer<typeof masterCreateSchema>;
 
@@ -183,10 +207,13 @@ export const masterUpdateSchema = z
     rev: z.number({ message: 'rev is required' }).int().min(1),
     name: masterNameSchema.optional(),
     provinceId: objectIdStringSchema.optional(),
+    divisionId: objectIdStringSchema.optional(),
+    districtId: objectIdStringSchema.optional(),
+    contactPerson: contactPersonSchema.optional(),
     active: z.boolean().optional(),
   })
   .strict()
-  .refine((v) => v.name !== undefined || v.provinceId !== undefined || v.active !== undefined, {
+  .refine((v) => Object.keys(v).some((key) => key !== 'rev'), {
     message: 'Nothing to update',
   });
 export type MasterUpdateInput = z.infer<typeof masterUpdateSchema>;

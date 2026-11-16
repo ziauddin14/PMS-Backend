@@ -337,6 +337,95 @@ describe('master data — search, filters and pagination', () => {
   });
 });
 
+describe('master data — districts, cities and vendor contacts', () => {
+  async function chain() {
+    const province = (await create('provinces', { name: 'Synthetic Province' })).body;
+    const division = (
+      await create('divisions', { name: 'Synthetic Division', provinceId: province.id })
+    ).body;
+    const district = (
+      await create('districts', { name: 'Synthetic District', divisionId: division.id })
+    ).body;
+    const city = (await create('cities', { name: 'Synthetic City', districtId: district.id })).body;
+    return { province, division, district, city };
+  }
+
+  it('creates the full location chain and returns every level above a record', async () => {
+    const { province, division, district, city } = await chain();
+    expect(district.code).toMatch(/^DST-\d{6}$/);
+    expect(city.code).toMatch(/^CTY-\d{6}$/);
+    expect(district).toMatchObject({
+      divisionId: division.id,
+      divisionName: 'Synthetic Division',
+      provinceId: province.id,
+      provinceName: 'Synthetic Province',
+    });
+    const read = masterRecordSchema.parse((await list(`cities/${city.id}`, '', viewer)).body);
+    expect(read).toMatchObject({
+      districtId: district.id,
+      districtName: 'Synthetic District',
+      divisionId: division.id,
+      divisionName: 'Synthetic Division',
+      provinceId: province.id,
+      provinceName: 'Synthetic Province',
+    });
+  });
+
+  it('requires the right parent for each level and rejects the others', async () => {
+    const { province, division, district } = await chain();
+    expect((await create('districts', { name: 'Synthetic D2' })).status).toBe(400);
+    expect(
+      (await create('districts', { name: 'Synthetic D2', provinceId: province.id })).status,
+    ).toBe(400);
+    expect((await create('cities', { name: 'Synthetic C2', divisionId: division.id })).status).toBe(
+      400,
+    );
+    const wrong = await create('cities', { name: 'Synthetic C2', districtId: division.id });
+    expect(wrong.status).toBe(400);
+    expect(wrong.body.error.details[0].message).toBe('District not found');
+    expect((await list('cities', `?districtId=${district.id}`)).body.total).toBe(1);
+    expect((await list('cities', `?divisionId=${division.id}`)).status).toBe(400);
+  });
+
+  it('keeps names unique per parent only', async () => {
+    const { division, district } = await chain();
+    const other = (
+      await create('districts', { name: 'Synthetic Other District', divisionId: division.id })
+    ).body;
+    await create('cities', { name: 'Synthetic City', districtId: other.id }).expect(201);
+    const dup = await create('cities', { name: 'synthetic  CITY', districtId: district.id });
+    expect(dup.status).toBe(409);
+  });
+
+  it('blocks deactivating a division or district that has active children', async () => {
+    const { division, district, city } = await chain();
+    const blocked = await update('districts', district.id, { rev: 1, active: false });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error.message).toMatch(/1 active city/);
+    expect((await update('divisions', division.id, { rev: 1, active: false })).status).toBe(409);
+    await update('cities', city.id, { rev: 1, active: false }).expect(200);
+    await update('districts', district.id, { rev: 1, active: false }).expect(200);
+    await update('divisions', division.id, { rev: 1, active: false }).expect(200);
+    expect((await update('cities', city.id, { rev: 2, active: true })).status).toBe(400);
+  });
+
+  it('stores an optional contact person for vendors only', async () => {
+    const vendor = await create('vendors', {
+      name: 'Synthetic Traders',
+      contactPerson: '  Synthetic   Person ',
+    });
+    expect(vendor.status).toBe(201);
+    expect(vendor.body).toMatchObject({ contactPerson: 'Synthetic Person' });
+    const changed = await update('vendors', vendor.body.id, { rev: 1, contactPerson: '' });
+    expect(changed.body).toMatchObject({ contactPerson: null, rev: 2 });
+    const plain = (await create('vendors', { name: 'Synthetic Plain' })).body;
+    expect(plain.contactPerson).toBeNull();
+    expect(
+      (await create('items', { name: 'Synthetic Item', contactPerson: 'Synthetic' })).status,
+    ).toBe(400);
+  });
+});
+
 describe('master data — authentication and roles', () => {
   it('requires a session for reads and writes', async () => {
     expect((await request(app).get('/api/master/items')).status).toBe(401);

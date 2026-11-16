@@ -4,24 +4,37 @@
 
 ## 1. Entities and evidence
 
-| Entity      | Code prefix | M1 evidence                                                                     |
-| ----------- | ----------- | ------------------------------------------------------------------------------- |
-| Provinces   | `PRV-`      | BRD §6 Module 2 ("Provinces"); BRD Step 2 demand registration; `02` §1 Location |
-| Divisions   | `DIV-`      | BRD §6 Module 2 ("Divisions"); `02` §1 Location; PRD `Division Info`            |
-| Departments | `DEP-`      | BRD §6 Module 2 ("Departments"); `02` §1 Department                             |
-| Items       | `ITM-`      | BRD §6 Module 2 ("Items"); `02` §1 Item                                         |
-| Vendors     | `VEN-`      | BRD §6 Module 2 ("Vendors"); `02` §1 Vendor                                     |
-| Warehouses  | `WHS-`      | `02` §1 Warehouse; CD-03 (warehouse route), CD-13 (stock per lot and warehouse) |
+| Entity      | Code prefix | M1 evidence                                                                                      |
+| ----------- | ----------- | ------------------------------------------------------------------------------------------------ |
+| Provinces   | `PRV-`      | BRD §6 Module 2 ("Provinces"); BRD Step 2 demand registration; `02` §1 Location                  |
+| Divisions   | `DIV-`      | BRD §6 Module 2 ("Divisions"); `02` §1 Location; PRD `Division Info`                             |
+| Departments | `DEP-`      | BRD §6 Module 2 ("Departments"); `02` §1 Department                                              |
+| Items       | `ITM-`      | BRD §6 Module 2 ("Items"); `02` §1 Item                                                          |
+| Vendors     | `VEN-`      | BRD §6 Module 2 ("Vendors"); `02` §1 Vendor                                                      |
+| Warehouses  | `WHS-`      | `02` §1 Warehouse; CD-03 (warehouse route), CD-13 (stock per lot and warehouse)                  |
+| Districts   | `DST-`      | Production department's location sheet (`Production Details.xlsx`, Province tab), added after M4 |
+| Cities      | `CTY-`      | Same sheet: every city/area with its district, division and province                             |
+
+Locations form a chain: **province → division → district → city**. Each level stores only its
+direct parent (`provinceId`, `divisionId`, `districtId`); API responses add every level above a
+record (ids and names), so a city row shows its district, division and province. Vendors have an
+optional `contactPerson` (company name = `name`).
+
+**Bulk load:** `npm run import-master -- --file <master-data.json> [--commit]` loads locations,
+items, warehouses, departments and vendors from a JSON file (shape in
+`src/scripts/importMasterData.ts`). Without `--commit` it only reports counts. It reuses records
+whose name already exists (per parent for locations), so it can be run again safely. The JSON file
+is business data and stays outside the repository.
 
 **Deliberately not implemented in M4:**
 
-| Not implemented                 | Reason                                                                                                                                                                                                                                                                      |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cities / districts (`Location`) | Needed for dispatch destinations (M8). Q-10 is still open: whether Karachi/Lahore/Islamabad are province-level and whether `Division Info` is authoritative (it has duplicate city names). Provinces store whatever names the operator enters, so Q-10 does not block them. |
-| Item rate, unit, minimum stock  | The meaning of the `Rates` sheet (UPDATE/OLD; rate charged to divisions vs purchase price) is not defined in M1; units are not recorded in the workbooks; minimum stock is Low-confidence (Q-02). Prices belong to demand lines (M5) and PO lines (M6).                     |
-| Bank accounts, transporters     | Used by payments (M9) and Bilty (M8).                                                                                                                                                                                                                                       |
-| Legacy spelling aliases         | Used by historical import and Excel sync (M10); depend on import tooling.                                                                                                                                                                                                   |
-| Seeded records                  | No master values are pre-loaded. M1 lists real department/warehouse names, but values are entered by the operator, not invented or imported.                                                                                                                                |
+| Not implemented                              | Reason                                                                                                                                                                                                                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cities / districts on demands and dispatches | Dispatch destinations remain divisions. Linking a city/district to demand lines or dispatches is a separate change. Q-10 (Karachi/Lahore/Islamabad at province level) is still open; the sheet lists them as provinces and they were loaded as given.   |
+| Item rate, unit, minimum stock               | The meaning of the `Rates` sheet (UPDATE/OLD; rate charged to divisions vs purchase price) is not defined in M1; units are not recorded in the workbooks; minimum stock is Low-confidence (Q-02). Prices belong to demand lines (M5) and PO lines (M6). |
+| Bank accounts, transporters                  | Used by payments (M9) and Bilty (M8).                                                                                                                                                                                                                   |
+| Legacy spelling aliases                      | Used by historical import and Excel sync (M10); depend on import tooling.                                                                                                                                                                               |
+| Seeded records                               | Nothing is pre-loaded by the application. Real values come from the operator or from the department's own list via `import-master`.                                                                                                                     |
 
 ## 2. Fields and rules (all six entities)
 
@@ -46,7 +59,7 @@ All routes require a session. Writes also require the CSRF header (M3).
 | `POST /api/master/:entity`                                                                 | OPERATOR         | Create `{ name, provinceId? }` → `201`                                                                                      |
 | `PATCH /api/master/:entity/:id`                                                            | OPERATOR         | `{ rev, name?, provinceId?, active? }`; stale `rev` → `409`                                                                 |
 
-`:entity` ∈ `provinces, divisions, departments, items, vendors, warehouses`. Responses contain only `id, code, name, active, rev, createdAt, updatedAt` (+ `provinceId, provinceName` for divisions); internal fields (`nameKey`, lifecycle, actors) are not returned. Errors: `400 VALIDATION_FAILED`, `401`, `403 FORBIDDEN` (read-only users), `403 CSRF_FAILED`, `404`, `409 CONFLICT` (duplicate name, stale revision, active children).
+`:entity` ∈ `provinces, divisions, districts, cities, departments, items, vendors, warehouses`. Create/update take the direct parent only (`provinceId` for divisions, `divisionId` for districts, `districtId` for cities) and `contactPerson` for vendors; lists filter by the same parent field. Responses contain only `id, code, name, active, rev, createdAt, updatedAt` (+ the ids and names of every level above a location record, + `contactPerson` for vendors); internal fields (`nameKey`, lifecycle, actors) are not returned. Errors: `400 VALIDATION_FAILED`, `401`, `403 FORBIDDEN` (read-only users), `403 CSRF_FAILED`, `404`, `409 CONFLICT` (duplicate name, stale revision, active children).
 
 ## 4. Collections and indexes
 
