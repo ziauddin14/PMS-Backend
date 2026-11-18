@@ -87,6 +87,41 @@ Reports exclude personal data (receiver names/phones), are capped at 5,000 rows 
 | Division 3 % recovery                    | Not implemented — the recovery rules are not in the code base's requirement notes. The dashboard indicator stays "not available".                                    |
 | Sync workbook targets                    | Receipts → `STOCK` workbook; dispatches → `PRD/PO` and `DMD/demand sheet `; payments → `PRD/PO`. Sheet names to be confirmed in M10.                                 |
 
+## 5a. Opening stock (goods already in a warehouse)
+
+Goods that were in a warehouse before PMS, or arrived without a PMS purchase order, are entered on
+the Stock screen with **Add opening stock** (OPERATOR). An entry (`opening_stock` collection, code
+`OPN-000001`) has a warehouse, date, optional reference (e.g. an old PO number), notes and item
+lines. Each line becomes its own stock lot (CD-13 special non-PO lot): the ledger and balances store
+the entry id and line id in the same fields as a PO lot, and `src/inventory/lots.ts` resolves both
+kinds. In responses the lot's `purchaseOrderCode` is the `OPN-` code and `poNumber` is the reference
+(or "Opening stock"). Movements use types `OPENING` / `OPENING_CANCELLED`.
+
+Opening lots are dispatched like PO lots. They never change PO completion or payments, and have no
+vendor in the stock report. An entry is cancelled with a reason (never edited); cancelling is
+refused while any of its stock has been dispatched. API: `GET/POST /api/stock/opening`,
+`GET /api/stock/opening/:id`, `POST /api/stock/opening/:id/cancel`.
+
+## 5b. Photos and documents (Cloudinary uploads)
+
+Dispatches (Bilty), payments, receipts (vendor challan) and purchase orders (invoice) carry up to 20
+supporting documents (`{ label, url }`). Besides pasting an `https://` link, the operator can upload
+photos or PDFs:
+
+1. The browser asks `POST /api/uploads/signature` (OPERATOR + CSRF, body `{ purpose }` =
+   `dispatch` | `payment` | `receipt` | `purchase-order`). The API signs a Cloudinary upload
+   (folder `<CLOUDINARY_FOLDER>/<purpose>`, formats jpg/jpeg/png/webp/heic/pdf, SHA-1 signature). The
+   API secret never leaves the server; Cloudinary rejects signatures older than about an hour.
+2. Photos are shrunk in the browser (longest side 1600 px, JPEG) and sent **directly to Cloudinary**
+   (files never pass through Render). Max 10 MB.
+3. The returned `https://res.cloudinary.com/…` link is saved as a normal document link. Pages show
+   photos as thumbnails.
+
+`GET /api/uploads/config` tells the browser whether uploads are set up. Without the three
+`CLOUDINARY_*` variables the upload button is hidden, links still work, and the signature endpoint
+returns `503`. Uploaded files are reachable by anyone who has the link (not indexed or listed);
+removing a document from a record does not delete the file from Cloudinary.
+
 ## 6. M10 status — what is and is not done
 
 Done: every change queues an idempotent outbound job (since M2); the sync status API and screen show queue health per workbook/sheet and let the operator re-queue failed or conflicting jobs.

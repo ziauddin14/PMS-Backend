@@ -304,6 +304,59 @@ describe('creating demands', () => {
   });
 });
 
+describe('destination city on demand lines', () => {
+  it('stores an optional city that must lie in the destination division', async () => {
+    const district = await master('districts', {
+      name: 'Synthetic District',
+      divisionId: refs.divisionA1,
+    });
+    const city = await master('cities', { name: 'Synthetic City', districtId: district });
+    const otherDistrict = await master('districts', {
+      name: 'Synthetic Other District',
+      divisionId: refs.divisionA2,
+    });
+    const otherCity = await master('cities', {
+      name: 'Synthetic Far City',
+      districtId: otherDistrict,
+    });
+
+    const demand = await createDemand({
+      lines: [
+        { itemId: refs.itemBox, destinationDivisionId: refs.divisionA1, cityId: city, quantity: 5 },
+        { itemId: refs.itemBook, destinationDivisionId: refs.divisionA2, quantity: 2 },
+      ],
+    });
+    expect(demand.lines[0]!.city).toMatchObject({
+      id: city,
+      name: 'Synthetic City',
+      districtName: 'Synthetic District',
+    });
+    expect(demand.lines[1]!.city).toBeNull();
+    const asViewer = demandDetailSchema.parse((await get(`/demands/${demand.id}`, viewer)).body);
+    expect(asViewer.lines[0]!.city?.name).toBe('Synthetic City');
+
+    const wrong = await send(
+      'post',
+      '/demands',
+      validDemand({
+        lines: [
+          {
+            itemId: refs.itemBox,
+            destinationDivisionId: refs.divisionA1,
+            cityId: otherCity,
+            quantity: 5,
+          },
+        ],
+      }),
+    );
+    expect(wrong.status).toBe(400);
+    expect(wrong.body.error.details[0]).toMatchObject({
+      path: 'lines.0.cityId',
+      message: 'City "Synthetic Far City" is not in division "Synthetic A1"',
+    });
+  });
+});
+
 describe('editing and cancelling demands', () => {
   it('edits header and lines with revision checks and stable line identity', async () => {
     const demand = await createDemand();

@@ -48,6 +48,21 @@ const envSchema = z
     LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1000).default(20),
     LOGIN_MAX_FAILURES: z.coerce.number().int().min(1).max(100).default(5),
     LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
+
+    // Image uploads (Cloudinary). Optional: without them the upload button is hidden.
+    CLOUDINARY_CLOUD_NAME: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,100}$/, { message: 'must be the Cloudinary cloud name' })
+      .optional(),
+    CLOUDINARY_API_KEY: z
+      .string()
+      .regex(/^[0-9]{5,30}$/, { message: 'must be the numeric Cloudinary API key' })
+      .optional(),
+    CLOUDINARY_API_SECRET: z.string().min(10, { message: 'is too short' }).max(200).optional(),
+    CLOUDINARY_FOLDER: z
+      .string()
+      .regex(/^[A-Za-z0-9_\-/]{1,100}$/, { message: 'must be letters, digits, "_", "-" or "/"' })
+      .default('mab-pms'),
   })
   .superRefine((env, ctx) => {
     if (!env.MONGODB_ALLOW_REMOTE && env.MONGODB_URI && !isLocalMongoUri(env.MONGODB_URI)) {
@@ -89,6 +104,19 @@ const envSchema = z
         message: '"none" requires SESSION_COOKIE_SECURE=true',
       });
     }
+    const cloudinary = [
+      env.CLOUDINARY_CLOUD_NAME,
+      env.CLOUDINARY_API_KEY,
+      env.CLOUDINARY_API_SECRET,
+    ];
+    if (cloudinary.some(Boolean) && !cloudinary.every(Boolean)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['CLOUDINARY_CLOUD_NAME'],
+        message:
+          'CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET must be set together',
+      });
+    }
     if (env.SESSION_IDLE_MINUTES > env.SESSION_TTL_HOURS * 60) {
       ctx.addIssue({
         code: 'custom',
@@ -127,6 +155,13 @@ export interface AppConfig {
     maxFailedLogins: number;
     lockoutMs: number;
   };
+  /** Signed direct image uploads to Cloudinary; null when not configured. */
+  uploads: {
+    cloudName: string;
+    apiKey: string;
+    apiSecret: string;
+    folder: string;
+  } | null;
 }
 
 /**
@@ -200,5 +235,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       maxFailedLogins: values.LOGIN_MAX_FAILURES,
       lockoutMs: values.LOGIN_LOCKOUT_MINUTES * 60_000,
     },
+    uploads:
+      values.CLOUDINARY_CLOUD_NAME && values.CLOUDINARY_API_KEY && values.CLOUDINARY_API_SECRET
+        ? {
+            cloudName: values.CLOUDINARY_CLOUD_NAME,
+            apiKey: values.CLOUDINARY_API_KEY,
+            apiSecret: values.CLOUDINARY_API_SECRET,
+            folder: values.CLOUDINARY_FOLDER,
+          }
+        : null,
   };
 }

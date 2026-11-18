@@ -36,3 +36,10 @@ services:
       # rewrite proxy); "none" only if they are on different sites. See docs/m3-auth-dashboard.md.
       - key: SESSION_COOKIE_SAMESITE
         sync: false
+      # Image uploads (optional): all three or none. See docs/deployment.md.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false

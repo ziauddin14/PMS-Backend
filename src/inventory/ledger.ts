@@ -54,7 +54,7 @@ export interface StockMovementDoc {
   purchaseOrderId: ObjectId;
   poLineId: ObjectId;
   quantity: number;
-  source: { kind: 'RECEIPT' | 'DISPATCH'; id: ObjectId; code: string };
+  source: { kind: 'RECEIPT' | 'DISPATCH' | 'OPENING'; id: ObjectId; code: string };
   actor: Actor;
 }
 
@@ -238,7 +238,16 @@ const ledgerSpecs: CollectionSpec[] = [
         properties: {
           movementDate: { bsonType: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
           recordedAt: { bsonType: 'date' },
-          type: { enum: ['RECEIPT', 'RECEIPT_CANCELLED', 'DISPATCH', 'DISPATCH_CANCELLED'] },
+          type: {
+            enum: [
+              'RECEIPT',
+              'RECEIPT_CANCELLED',
+              'DISPATCH',
+              'DISPATCH_CANCELLED',
+              'OPENING',
+              'OPENING_CANCELLED',
+            ],
+          },
           locationKind: { enum: ['WAREHOUSE', 'DIVISION'] },
           quantity: { bsonType: ['int', 'long', 'double'] },
         },

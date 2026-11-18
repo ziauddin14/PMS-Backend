@@ -42,6 +42,15 @@
 
 **Reference rule (same as M4):** a reference that is new or changed must point to an **active** record. A reference that is unchanged only has to exist. So a demand made before a record was deactivated can still be edited, and it keeps its historical reference. The UI shows such a reference as "(inactive)".
 
+**Destination city (added later).** A line may also carry an optional `cityId`. The city must
+belong to the destination division (city → district → division), otherwise `400` on
+`lines.N.cityId`. Responses include `city` (id, code, name, `districtName`) — not personal data, so
+read-only users see it. In the form, typing or choosing a city fills the destination division and the
+receiver name and phone from the Receivers list (the operator can still change them).
+
+**Free text.** Notes and other text fields accept any characters; invisible control characters are
+removed and Windows line breaks are normalised. Notes keep their line breaks.
+
 ## 3. API
 
 Every route requires a session. Writes also require the CSRF header and the `OPERATOR` role.

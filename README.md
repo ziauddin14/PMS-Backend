@@ -3,7 +3,7 @@
 Node.js + Express + TypeScript + MongoDB API for the MAB Production Management System.
 Separate repository from the frontend (`../frontend`). Deployment target: Render (this folder is the project root).
 
-**Status:** M7–M11 — sign-in, roles, dashboard, master data, demands, purchase orders, goods receiving and stock ledger, dispatch with Bilty and document links, vendor payments, Excel-sync queue monitoring and reports (JSON/CSV). The Excel workbook processor itself is not enabled (needs authorisation). Technical notes: [`docs/m2-foundation.md`](docs/m2-foundation.md), [`docs/m3-auth-dashboard.md`](docs/m3-auth-dashboard.md), [`docs/m4-master-data.md`](docs/m4-master-data.md), [`docs/m5-demand-management.md`](docs/m5-demand-management.md), [`docs/m6-purchase-order-management.md`](docs/m6-purchase-order-management.md), [`docs/m7-m11-operations.md`](docs/m7-m11-operations.md). Deployment and handover: [`docs/deployment.md`](docs/deployment.md).
+**Status:** M7–M11 — sign-in, roles, dashboard, master data, demands, purchase orders, goods receiving, opening stock and stock ledger, dispatch with Bilty, photo uploads (Cloudinary) and document links, receivers per city, vendor payments, Excel-sync queue monitoring and reports (JSON/CSV). The Excel workbook processor itself is not enabled (needs authorisation). Technical notes: [`docs/m2-foundation.md`](docs/m2-foundation.md), [`docs/m3-auth-dashboard.md`](docs/m3-auth-dashboard.md), [`docs/m4-master-data.md`](docs/m4-master-data.md), [`docs/m5-demand-management.md`](docs/m5-demand-management.md), [`docs/m6-purchase-order-management.md`](docs/m6-purchase-order-management.md), [`docs/m7-m11-operations.md`](docs/m7-m11-operations.md). Deployment and handover: [`docs/deployment.md`](docs/deployment.md).
 
 > **Data safety.** Never place workbooks, exports, backups or real business data in this repository. Tests use synthetic data only. Do not connect to MongoDB Atlas until it is separately authorised.
 
@@ -40,19 +40,21 @@ npm run user-admin -- create --username usman --display-name "Usman Bhai" --role
 
 ## Checks
 
-| Command                    | What it does                                   |
-| -------------------------- | ---------------------------------------------- |
-| `npm run lint`             | ESLint                                         |
-| `npm run typecheck`        | TypeScript check (source and tests)            |
-| `npm test`                 | All tests (unit + integration)                 |
-| `npm run test:unit`        | Unit tests only — no database needed           |
-| `npm run test:integration` | Integration tests against an in-memory MongoDB |
-| `npm run build`            | Compile to `dist/`                             |
-| `npm start`                | Run the compiled API                           |
-| `npm run user-admin -- …`  | Create, list, disable, unlock; reset password  |
-| `npm run dev:memory`       | Dev API on an in-memory DB with demo accounts  |
-| `npm run format:check`     | Prettier check                                 |
-| `npm run check`            | Lint, typecheck, tests and build               |
+| Command                         | What it does                                      |
+| ------------------------------- | ------------------------------------------------- |
+| `npm run lint`                  | ESLint                                            |
+| `npm run typecheck`             | TypeScript check (source and tests)               |
+| `npm test`                      | All tests (unit + integration)                    |
+| `npm run test:unit`             | Unit tests only — no database needed              |
+| `npm run test:integration`      | Integration tests against an in-memory MongoDB    |
+| `npm run build`                 | Compile to `dist/`                                |
+| `npm start`                     | Run the compiled API                              |
+| `npm run user-admin -- …`       | Create, list, disable, unlock; reset password     |
+| `npm run import-master -- …`    | Load master data from JSON (dry run first)        |
+| `npm run import-receivers -- …` | Load receivers per city from JSON (dry run first) |
+| `npm run dev:memory`            | Dev API on an in-memory DB with demo accounts     |
+| `npm run format:check`          | Prettier check                                    |
+| `npm run check`                 | Lint, typecheck, tests and build                  |
 
 ## Configuration
 

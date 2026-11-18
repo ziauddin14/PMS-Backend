@@ -29,11 +29,8 @@ import {
   type RefDocs,
   type StockMovementDoc,
 } from '../inventory/ledger.js';
+import { resolveLots } from '../inventory/lots.js';
 import type { MasterRecordDoc } from '../masterData/definitions.js';
-import {
-  PURCHASE_ORDERS_COLLECTION,
-  type PurchaseOrderDoc,
-} from '../purchaseOrders/definitions.js';
 import type { RecordStore } from '../records/recordStore.js';
 import {
   DISPATCHES_COLLECTION,
@@ -164,19 +161,11 @@ export class DispatchService {
       }
     }
 
-    // Resolve lots (PO lines) in one query.
-    const lineIds = [...new Set(input.lines.map((l) => l.poLineId))].map((id) => new ObjectId(id));
-    const pos = await db
-      .collection<PurchaseOrderDoc>(PURCHASE_ORDERS_COLLECTION)
-      .find({ 'lines._id': { $in: lineIds } })
-      .toArray();
-    const lotIndex = new Map<
-      string,
-      { po: PurchaseOrderDoc; line: PurchaseOrderDoc['lines'][number] }
-    >();
-    for (const po of pos) {
-      for (const line of po.lines) lotIndex.set(line._id.toHexString(), { po, line });
-    }
+    // Resolve lots (PO lines and opening-stock lines) in one go.
+    const lotIndex = await resolveLots(
+      db,
+      input.lines.map((l) => l.poLineId),
+    );
     const demandLines = new Map((demand?.lines ?? []).map((l) => [l._id.toHexString(), l]));
     const delivered = await readTallies(
       db,
@@ -221,7 +210,7 @@ export class DispatchService {
           } else {
             demandLineId = dLine._id;
             demandLineNo = dLine.lineNo;
-            if (!dLine.itemId.equals(lot.line.itemId)) {
+            if (!dLine.itemId.equals(lot.itemId)) {
               errors.push({
                 path: `${path}.demandLineId`,
                 message: 'The demand line is for a different item than this stock lot',
@@ -248,12 +237,12 @@ export class DispatchService {
       lines.push({
         _id: new ObjectId(),
         lineNo: index + 1,
-        itemId: lot.line.itemId,
-        purchaseOrderId: lot.po._id,
-        purchaseOrderCode: lot.po.code,
-        poNumber: lot.po.poNumber,
-        poLineId: lot.line._id,
-        poLineNo: lot.line.lineNo,
+        itemId: lot.itemId,
+        purchaseOrderId: lot.ownerId,
+        purchaseOrderCode: lot.ownerCode,
+        poNumber: lot.label,
+        poLineId: lot.lineId,
+        poLineNo: lot.lineNo,
         quantity: line.quantity,
         demandLineId,
         demandLineNo,

@@ -407,6 +407,29 @@ export class DemandService {
       } else {
         seenPairs.set(pairKey, index);
       }
+      let cityId: ObjectId | null = null;
+      if (input.cityId) {
+        const city = await this.checkRef(
+          'cities',
+          input.cityId,
+          previous?.cityId ?? undefined,
+          `${path}.cityId`,
+          'City',
+          errors,
+        );
+        if (city && destination) {
+          const district = city.districtId
+            ? await this.master('districts').findOne({ _id: city.districtId })
+            : null;
+          if (!district?.divisionId?.equals(destination._id)) {
+            errors.push({
+              path: `${path}.cityId`,
+              message: `City "${city.name}" is not in division "${destination.name}"`,
+            });
+          }
+        }
+        cityId = city?._id ?? null;
+      }
       if (!item || !destination) continue;
 
       lines.push({
@@ -414,6 +437,7 @@ export class DemandService {
         lineNo: previous?.lineNo ?? nextLineNo++,
         itemId: item._id,
         destinationDivisionId: destination._id,
+        cityId,
         quantity: input.quantity,
         receiverName: input.receiverName ?? null,
         receiverPhone: input.receiverPhone ?? null,
@@ -439,6 +463,7 @@ export class DemandService {
       provinces: new Set<string>(),
       divisions: new Set<string>(),
       items: new Set<string>(),
+      cities: new Set<string>(),
     };
     for (const doc of docs) {
       ids.departments.add(doc.departmentId.toHexString());
@@ -447,6 +472,7 @@ export class DemandService {
       for (const line of doc.lines) {
         ids.items.add(line.itemId.toHexString());
         ids.divisions.add(line.destinationDivisionId.toHexString());
+        if (line.cityId) ids.cities.add(line.cityId.toHexString());
       }
     }
     const result: Record<string, RefDocs> = {};
@@ -466,6 +492,19 @@ export class DemandService {
         .toArray();
       for (const doc of more) result.provinces?.set(doc._id.toHexString(), doc);
     }
+    // District names of destination cities.
+    const districtIds = [...(result.cities?.values() ?? [])]
+      .map((c) => c.districtId)
+      .filter((id): id is ObjectId => Boolean(id));
+    result.districts = new Map(
+      districtIds.length === 0
+        ? []
+        : (
+            await this.master('districts')
+              .find({ _id: { $in: districtIds } })
+              .toArray()
+          ).map((d) => [d._id.toHexString(), d]),
+    );
     return result;
   }
 
@@ -524,6 +563,17 @@ export class DemandService {
               ...refOf(refs.divisions, line.destinationDivisionId),
               provinceName,
             },
+            city: line.cityId
+              ? {
+                  ...refOf(refs.cities, line.cityId),
+                  districtName: (() => {
+                    const districtId = refs.cities?.get(line.cityId.toHexString())?.districtId;
+                    return districtId
+                      ? (refs.districts?.get(districtId.toHexString())?.name ?? null)
+                      : null;
+                  })(),
+                }
+              : null,
             quantity: line.quantity,
             quantityDelivered,
             quantityRemaining: line.quantity - quantityDelivered,

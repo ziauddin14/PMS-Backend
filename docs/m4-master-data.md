@@ -14,6 +14,7 @@
 | Warehouses  | `WHS-`      | `02` §1 Warehouse; CD-03 (warehouse route), CD-13 (stock per lot and warehouse)                  |
 | Districts   | `DST-`      | Production department's location sheet (`Production Details.xlsx`, Province tab), added after M4 |
 | Cities      | `CTY-`      | Same sheet: every city/area with its district, division and province                             |
+| Receivers   | `RCV-`      | Department's receiver sheet (`Receiver Name number.xlsx`): receiver name and phone per city      |
 
 Locations form a chain: **province → division → district → city**. Each level stores only its
 direct parent (`provinceId`, `divisionId`, `districtId`); API responses add every level above a
@@ -35,6 +36,21 @@ is business data and stays outside the repository.
 | Bank accounts, transporters                  | Used by payments (M9) and Bilty (M8).                                                                                                                                                                                                                   |
 | Legacy spelling aliases                      | Used by historical import and Excel sync (M10); depend on import tooling.                                                                                                                                                                               |
 | Seeded records                               | Nothing is pre-loaded by the application. Real values come from the operator or from the department's own list via `import-master`.                                                                                                                     |
+
+**Receivers** (added after M4) sit below cities: `cityId` is required and responses carry the city,
+district, division and province. `phone` is optional (digits, spaces, `+`, `-`, brackets). Receiver
+names and phones are personal data (Q-30 open, most restrictive default): the list is readable by
+the Production Operator only (`403` for read-only users) and the frontend hides the tab for them.
+A city cannot be deactivated while it has active receivers.
+
+Load the department's sheet with `npm run import-receivers -- --file <receivers.json> [--commit]`
+(`src/scripts/importReceivers.ts`): each row (province, division, city, name, phone) is matched to an
+existing city in that division, ignoring case, spaces and punctuation. Rows that do not match are
+listed (locations only, never names or phones) and skipped; nothing is invented. The dry run only
+reads. Re-running never duplicates a receiver (same name in the same city is reused).
+
+**Text fields** (all lists): invisible control characters are removed and line breaks become spaces;
+text is never rejected because of its characters.
 
 ## 2. Fields and rules (all six entities)
 

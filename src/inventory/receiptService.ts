@@ -185,6 +185,7 @@ export class ReceiptService {
       receiptDate: input.receiptDate,
       vendorChallanNo: input.vendorChallanNo ?? null,
       notes: input.notes ?? null,
+      documents: input.documents.map((d) => ({ label: d.label, url: d.url })),
       lines,
       totalQuantity: lines.reduce((sum, line) => sum + line.quantity, 0),
       searchText: [po.poNumber, po.code, input.vendorChallanNo ?? '', input.notes ?? '']
@@ -374,6 +375,7 @@ export class ReceiptService {
     return {
       ...this.toSummary(doc, refs),
       notes: doc.notes,
+      documents: doc.documents ?? [],
       lines: doc.lines.map((line) => ({
         id: line._id.toHexString(),
         poLineId: line.poLineId.toHexString(),

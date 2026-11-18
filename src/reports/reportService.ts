@@ -20,6 +20,7 @@ import {
   PURCHASE_ORDERS_COLLECTION,
   type PurchaseOrderDoc,
 } from '../purchaseOrders/definitions.js';
+import { resolveLots } from '../inventory/lots.js';
 
 export const REPORT_ROW_LIMIT = 5000;
 /** UTF-8 byte-order mark so Excel opens Urdu/Arabic text in the CSV correctly. */
@@ -304,8 +305,7 @@ export class ReportService {
       .sort({ locationKind: -1, locationId: 1, itemId: 1 })
       .limit(REPORT_ROW_LIMIT + 1)
       .toArray();
-    const poIds = [...new Set(docs.map((d) => d.purchaseOrderId.toHexString()))];
-    const [items, warehouses, divisions, pos] = await Promise.all([
+    const [items, warehouses, divisions, lots] = await Promise.all([
       fetchMasterMap(
         this.db,
         'items',
@@ -321,28 +321,31 @@ export class ReportService {
         'divisions',
         docs.filter((d) => d.locationKind === 'DIVISION').map((d) => d.locationId.toHexString()),
       ),
-      this.db
-        .collection<PurchaseOrderDoc>(PURCHASE_ORDERS_COLLECTION)
-        .find({ _id: { $in: poIds.map((id) => new ObjectId(id)) } })
-        .toArray(),
+      resolveLots(
+        this.db,
+        docs.map((d) => d.poLineId),
+      ),
     ]);
-    const poMap = new Map(pos.map((p) => [p._id.toHexString(), p]));
     const vendors = await fetchMasterMap(
       this.db,
       'vendors',
-      pos.map((p) => p.vendorId.toHexString()),
+      [...lots.values()].flatMap((lot) => (lot.vendorId ? [lot.vendorId.toHexString()] : [])),
     );
     const rows = docs.map((doc) => {
-      const po = poMap.get(doc.purchaseOrderId.toHexString());
+      const lot = lots.get(doc.poLineId.toHexString());
       return {
         locationType: doc.locationKind === 'WAREHOUSE' ? 'Warehouse' : 'Division (direct)',
         location: name(
           refOf(doc.locationKind === 'WAREHOUSE' ? warehouses : divisions, doc.locationId),
         ),
         item: name(refOf(items, doc.itemId)),
-        poNumber: po?.poNumber ?? null,
-        poLineNo: po?.lines.find((l) => l._id.equals(doc.poLineId))?.lineNo ?? null,
-        vendor: po ? name(refOf(vendors, po.vendorId)) : null,
+        poNumber: lot
+          ? lot.kind === 'OPENING'
+            ? `${lot.ownerCode} ${lot.label}`
+            : lot.label
+          : null,
+        poLineNo: lot?.lineNo ?? null,
+        vendor: lot?.vendorId ? name(refOf(vendors, lot.vendorId)) : null,
         quantity: doc.quantity,
       };
     });

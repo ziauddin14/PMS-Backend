@@ -194,6 +194,7 @@ export class PurchaseOrderService {
       notes: input.notes ?? null,
       invoice,
       paymentSchedule,
+      documents: input.documents.map((d) => ({ label: d.label, url: d.url })),
       nextLineNo: builtLines.nextLineNo,
       lines: builtLines.lines,
       searchText: searchTextOf(trimmedPoNo, input.notes, invoice?.invoiceNo),
@@ -316,6 +317,10 @@ export class PurchaseOrderService {
 
     if (input.paymentSchedule !== undefined) {
       changes.paymentSchedule = this.buildSchedule(input.paymentSchedule, errors);
+    }
+
+    if (input.documents !== undefined) {
+      changes.documents = input.documents.map((d) => ({ label: d.label, url: d.url }));
     }
 
     if (input.lines !== undefined) {
@@ -834,6 +839,11 @@ export class PurchaseOrderService {
       approvedAmount: doc.approvedAmount,
       totalAmount: doc.totalAmount,
       lineCount: doc.lines.length,
+      itemNames: [
+        ...new Set(
+          doc.lines.map((l) => refs.items.get(l.itemId.toHexString())?.name ?? '(unknown item)'),
+        ),
+      ],
       totalQuantity: doc.lines.reduce((sum, l) => sum + l.quantityOrdered, 0),
       totalReceived,
       paidAmount: paidCents / 100,
@@ -905,6 +915,7 @@ export class PurchaseOrderService {
     return {
       ...summary,
       notes: doc.notes ?? null,
+      documents: doc.documents ?? [],
       invoice: doc.invoice
         ? {
             invoiceNo: doc.invoice.invoiceNo ?? null,

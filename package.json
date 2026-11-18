@@ -14,6 +14,7 @@
     "start": "node dist/server.js",
     "user-admin": "tsx --env-file-if-exists=.env src/scripts/userAdmin.ts",
     "import-master": "tsx --env-file-if-exists=.env src/scripts/importMasterData.ts",
+    "import-receivers": "tsx --env-file-if-exists=.env src/scripts/importReceivers.ts",
     "dev:memory": "tsx scripts/dev-memory.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",

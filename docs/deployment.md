@@ -20,6 +20,9 @@ No secret values belong in this file or in either repository. Enter them only in
 | `CORS_ALLOWED_ORIGINS`    | the Vercel production URL, e.g. `https://<project>.vercel.app` (no trailing slash) |
 | `SESSION_COOKIE_SAMESITE` | `lax` with the Vercel `/api` rewrite (recommended, §3); `none` only without it     |
 | `TRUST_PROXY`             | `1` direct; with the Vercel rewrite use `2` and confirm client IPs in the logs     |
+| `CLOUDINARY_CLOUD_NAME`   | Cloudinary cloud name (photo uploads; optional — all three or none)                |
+| `CLOUDINARY_API_KEY`      | Cloudinary API key                                                                 |
+| `CLOUDINARY_API_SECRET`   | Cloudinary API secret (secret)                                                     |
 
 The others (`NODE_ENV=production`, `HOST`, `MONGODB_REQUIRE_TRANSACTIONS=true`, `MONGODB_ALLOW_REMOTE=true`, `MONGOMS_DISABLE_POSTINSTALL=1`) come from `render.yaml`. Build: `npm ci --include=dev && npm run build`; start: `npm start`.
 

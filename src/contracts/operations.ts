@@ -1,20 +1,18 @@
 import { z } from 'zod';
-import { dateOnlySchema, masterRefSchema, objectIdStringSchema } from './api.js';
+import {
+  dateOnlySchema,
+  documentRefInputSchema,
+  documentRefSchema,
+  documentsInputSchema,
+  masterRefSchema,
+  objectIdStringSchema,
+  optionalText,
+} from './api.js';
 
 /**
  * Contracts for M7 (receiving & stock), M8 (dispatch, Bilty & documents), M9 (vendor payments),
  * M10 (sync status) and M11 (reports). Mirrored in the frontend `src/contracts/operations.ts`.
  */
-
-const optionalText = (max: number, label: string) =>
-  z
-    .string()
-    .trim()
-    .max(max, { message: `${label} must be at most ${max} characters` })
-    .refine((value) => !/\p{Cc}/u.test(value), { message: `${label} contains invalid characters` })
-    .transform((value) => (value.length === 0 ? null : value))
-    .nullable()
-    .optional();
 
 const quantitySchema = z
   .number({ message: 'Quantity is required' })
@@ -45,31 +43,12 @@ function dateRangeRefine<T extends { from?: string | undefined; to?: string | un
 }
 const dateRangeMessage = { message: '"from" must not be after "to"', path: ['from'] };
 
-/** Supporting document reference (e.g. a Google Drive link). Files are not stored by the PMS. */
-export const documentRefInputSchema = z
-  .object({
-    label: z
-      .string({ message: 'Document name is required' })
-      .trim()
-      .min(1, { message: 'Document name is required' })
-      .max(100, { message: 'Document name must be at most 100 characters' }),
-    url: z
-      .string({ message: 'Link is required' })
-      .trim()
-      .max(1000, { message: 'Link is too long' })
-      .refine((value) => /^https:\/\/[^\s]+$/i.test(value), {
-        message: 'Link must start with https://',
-      }),
-  })
-  .strict();
-export type DocumentRefInput = z.infer<typeof documentRefInputSchema>;
-export const documentRefSchema = z.object({ label: z.string(), url: z.string() });
-export type DocumentRef = z.infer<typeof documentRefSchema>;
-const documentsInputSchema = z
-  .array(documentRefInputSchema)
-  .max(20, { message: 'At most 20 documents' })
-  .optional()
-  .default([]);
+export {
+  documentRefInputSchema,
+  documentRefSchema,
+  type DocumentRef,
+  type DocumentRefInput,
+} from './api.js';
 
 export const stockLocationKinds = ['WAREHOUSE', 'DIVISION'] as const;
 export type StockLocationKind = (typeof stockLocationKinds)[number];
@@ -84,6 +63,10 @@ export const stockLocationSchema = z.object({
 });
 export type StockLocation = z.infer<typeof stockLocationSchema>;
 
+/**
+ * A stock lot: a PO line, or a line of an opening-stock entry (then `purchaseOrderId` /
+ * `purchaseOrderCode` are the entry's id and OPN- code, and `poNumber` its reference).
+ */
 export const poLotRefSchema = z.object({
   purchaseOrderId: z.string(),
   purchaseOrderCode: z.string(),
@@ -106,7 +89,9 @@ export const receiptCreateSchema = z
     purchaseOrderId: objectIdStringSchema,
     receiptDate: dateOnlySchema,
     vendorChallanNo: optionalText(50, 'Vendor challan number'),
-    notes: optionalText(1000, 'Notes'),
+    notes: optionalText(1000, 'Notes', true),
+    /** Photos / scans of the vendor challan (links, or images uploaded to Cloudinary). */
+    documents: documentsInputSchema,
     lines: z
       .array(z.object({ poLineId: objectIdStringSchema, quantity: quantitySchema }).strict())
       .min(1, { message: 'Receive at least one line' })
@@ -159,6 +144,7 @@ export type ReceiptSummary = z.infer<typeof receiptSummarySchema>;
 
 export const receiptDetailSchema = receiptSummarySchema.extend({
   notes: z.string().nullable(),
+  documents: z.array(documentRefSchema),
   lines: z.array(receiptLineSchema),
   cancellation: cancellationSchema,
 });
@@ -171,6 +157,76 @@ export const receiptListResponseSchema = z.object({
   total: z.number().int(),
 });
 export type ReceiptListResponse = z.infer<typeof receiptListResponseSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Opening stock — goods already in a warehouse before PMS (CD-13 special non-PO lots)
+// ---------------------------------------------------------------------------------------------
+
+export const openingStockCreateSchema = z
+  .object({
+    warehouseId: objectIdStringSchema,
+    entryDate: dateOnlySchema,
+    /** Optional old PO number or other reference the goods came from. */
+    reference: optionalText(100, 'Reference'),
+    notes: optionalText(1000, 'Notes', true),
+    lines: z
+      .array(z.object({ itemId: objectIdStringSchema, quantity: quantitySchema }).strict())
+      .min(1, { message: 'Add at least one item' })
+      .max(200, { message: 'At most 200 lines' }),
+  })
+  .strict();
+export type OpeningStockCreateInput = z.infer<typeof openingStockCreateSchema>;
+
+export const openingStockListQuerySchema = z
+  .object({
+    search: z.string().trim().max(100).optional(),
+    status: statusFilterSchema,
+    warehouseId: objectIdStringSchema.optional(),
+    from: dateOnlySchema.optional(),
+    to: dateOnlySchema.optional(),
+    page: pageSchema,
+    pageSize: pageSizeSchema,
+  })
+  .strict()
+  .refine(dateRangeRefine, dateRangeMessage);
+export type OpeningStockListQuery = z.infer<typeof openingStockListQuerySchema>;
+
+export const openingStockSummarySchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  entryDate: z.string(),
+  status: z.enum(['ACTIVE', 'CANCELLED']),
+  warehouse: masterRefSchema,
+  reference: z.string().nullable(),
+  totalQuantity: z.number().int(),
+  lineCount: z.number().int(),
+  rev: z.number().int(),
+  createdAt: z.string(),
+  createdBy: z.string().nullable(),
+});
+export type OpeningStockSummary = z.infer<typeof openingStockSummarySchema>;
+
+export const openingStockDetailSchema = openingStockSummarySchema.extend({
+  notes: z.string().nullable(),
+  lines: z.array(
+    z.object({
+      id: z.string(),
+      lineNo: z.number().int(),
+      item: masterRefSchema,
+      quantity: z.number().int(),
+    }),
+  ),
+  cancellation: cancellationSchema,
+});
+export type OpeningStockDetail = z.infer<typeof openingStockDetailSchema>;
+
+export const openingStockListResponseSchema = z.object({
+  items: z.array(openingStockSummarySchema),
+  page: z.number().int(),
+  pageSize: z.number().int(),
+  total: z.number().int(),
+});
+export type OpeningStockListResponse = z.infer<typeof openingStockListResponseSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // M7 — Stock balances and inventory ledger
@@ -212,6 +268,8 @@ export const stockMovementTypes = [
   'RECEIPT_CANCELLED',
   'DISPATCH',
   'DISPATCH_CANCELLED',
+  'OPENING',
+  'OPENING_CANCELLED',
 ] as const;
 export type StockMovementType = (typeof stockMovementTypes)[number];
 
@@ -241,7 +299,11 @@ export const stockMovementSchema = z.object({
   lot: poLotRefSchema,
   /** Positive = into the location, negative = out of it. */
   quantity: z.number().int(),
-  source: z.object({ kind: z.enum(['RECEIPT', 'DISPATCH']), id: z.string(), code: z.string() }),
+  source: z.object({
+    kind: z.enum(['RECEIPT', 'DISPATCH', 'OPENING']),
+    id: z.string(),
+    code: z.string(),
+  }),
   by: z.string().nullable(),
 });
 export type StockMovement = z.infer<typeof stockMovementSchema>;
@@ -274,7 +336,7 @@ export const dispatchCreateSchema = z
       .max(1_000_000_000)
       .nullable()
       .optional(),
-    notes: optionalText(1000, 'Notes'),
+    notes: optionalText(1000, 'Notes', true),
     documents: documentsInputSchema,
     lines: z
       .array(
@@ -300,7 +362,7 @@ export const dispatchUpdateSchema = z
     transporterName: optionalText(100, 'Transporter'),
     vehicleNo: optionalText(30, 'Vehicle number'),
     freightAmount: z.number().min(0).max(1_000_000_000).nullable().optional(),
-    notes: optionalText(1000, 'Notes'),
+    notes: optionalText(1000, 'Notes', true),
     documents: z.array(documentRefInputSchema).max(20).optional(),
   })
   .strict()
@@ -396,7 +458,7 @@ export const paymentCreateSchema = z
     method: z.enum(paymentMethods),
     reference: optionalText(100, 'Payment reference'),
     scheduleEntryNo: z.number().int().min(1).nullable().optional(),
-    notes: optionalText(1000, 'Notes'),
+    notes: optionalText(1000, 'Notes', true),
     documents: documentsInputSchema,
   })
   .strict();
@@ -555,3 +617,30 @@ export const reportResponseSchema = z.object({
   truncated: z.boolean(),
 });
 export type ReportResponse = z.infer<typeof reportResponseSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Image uploads (Bilty, payment proof, vendor challan, invoice) — signed direct uploads
+// ---------------------------------------------------------------------------------------------
+
+export const uploadPurposes = ['dispatch', 'payment', 'receipt', 'purchase-order'] as const;
+export type UploadPurpose = (typeof uploadPurposes)[number];
+
+export const uploadSignatureRequestSchema = z
+  .object({ purpose: z.enum(uploadPurposes, { message: 'Unknown upload purpose' }) })
+  .strict();
+export type UploadSignatureRequest = z.infer<typeof uploadSignatureRequestSchema>;
+
+/** Everything the browser needs to send one file straight to Cloudinary. */
+export const uploadSignatureSchema = z.object({
+  uploadUrl: z.string(),
+  apiKey: z.string(),
+  timestamp: z.string(),
+  folder: z.string(),
+  allowedFormats: z.string(),
+  signature: z.string(),
+  maxBytes: z.number().int(),
+});
+export type UploadSignature = z.infer<typeof uploadSignatureSchema>;
+
+export const uploadConfigSchema = z.object({ enabled: z.boolean() });
+export type UploadConfig = z.infer<typeof uploadConfigSchema>;

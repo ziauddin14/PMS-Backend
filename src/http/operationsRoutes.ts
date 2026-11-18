@@ -6,6 +6,8 @@ import {
   dispatchCreateSchema,
   dispatchListQuerySchema,
   dispatchUpdateSchema,
+  openingStockCreateSchema,
+  openingStockListQuerySchema,
   paymentCreateSchema,
   paymentListQuerySchema,
   receiptCreateSchema,
@@ -15,21 +17,26 @@ import {
   stockBalanceQuerySchema,
   stockMovementQuerySchema,
   syncJobQuerySchema,
+  uploadSignatureRequestSchema,
   type CancelWithReasonInput,
   type DispatchCreateInput,
   type DispatchUpdateInput,
+  type OpeningStockCreateInput,
   type PaymentCreateInput,
   type ReceiptCreateInput,
   type ReportKey,
+  type UploadSignatureRequest,
 } from '../contracts/operations.js';
 import type { DispatchService } from '../dispatch/dispatchService.js';
 import type { MutationContext } from '../domain/context.js';
 import { NotFoundError } from '../errors.js';
+import type { OpeningStockService } from '../inventory/openingStockService.js';
 import type { ReceiptService } from '../inventory/receiptService.js';
 import type { StockService } from '../inventory/stockService.js';
 import type { PaymentService } from '../payments/paymentService.js';
 import { toCsv, type ReportService } from '../reports/reportService.js';
 import type { SyncStatusService } from '../sync/syncStatusService.js';
+import { signUpload } from '../uploads/cloudinary.js';
 import { parseOrThrow } from '../validation.js';
 import { authenticate, getAuth, requireCsrf, requireRole } from './authMiddleware.js';
 import { validateBody } from './middleware.js';
@@ -37,6 +44,7 @@ import { validateBody } from './middleware.js';
 export interface OperationsServices {
   receipts: ReceiptService;
   stock: StockService;
+  openingStock: OpeningStockService;
   dispatches: DispatchService;
   payments: PaymentService;
   sync: SyncStatusService;
@@ -96,6 +104,20 @@ export function operationsRoutes(
     },
   );
 
+  // ---- Image uploads: the browser sends files straight to Cloudinary with a signature ----
+  router.get('/uploads/config', ...readers, (_req, res) => {
+    res.json({ enabled: config.uploads !== null });
+  });
+  router.post(
+    '/uploads/signature',
+    ...writers,
+    validateBody(uploadSignatureRequestSchema),
+    (_req, res) => {
+      const { purpose } = res.locals.body as UploadSignatureRequest;
+      res.json(signUpload(config.uploads, purpose));
+    },
+  );
+
   // ---- M7 stock ----
   router.get('/stock/balances', ...readers, async (req, res) => {
     res.json(await services.stock.balances(parseOrThrow(stockBalanceQuerySchema, req.query)));
@@ -103,6 +125,45 @@ export function operationsRoutes(
   router.get('/stock/movements', ...readers, async (req, res) => {
     res.json(await services.stock.movements(parseOrThrow(stockMovementQuerySchema, req.query)));
   });
+
+  // ---- Opening stock (goods already in a warehouse) ----
+  router.get('/stock/opening', ...readers, async (req, res) => {
+    res.json(
+      await services.openingStock.list(parseOrThrow(openingStockListQuerySchema, req.query)),
+    );
+  });
+  router.get('/stock/opening/:id', ...readers, async (req, res) => {
+    res.json(await services.openingStock.get(id(req.params.id)));
+  });
+  router.post(
+    '/stock/opening',
+    ...writers,
+    validateBody(openingStockCreateSchema),
+    async (_req, res) => {
+      res
+        .status(201)
+        .json(
+          await services.openingStock.create(
+            res.locals.body as OpeningStockCreateInput,
+            mutationContext(res),
+          ),
+        );
+    },
+  );
+  router.post(
+    '/stock/opening/:id/cancel',
+    ...writers,
+    validateBody(cancelWithReasonSchema),
+    async (req, res) => {
+      res.json(
+        await services.openingStock.cancel(
+          id(req.params.id),
+          res.locals.body as CancelWithReasonInput,
+          mutationContext(res),
+        ),
+      );
+    },
+  );
 
   // ---- M8 dispatch ----
   router.get('/dispatches', ...readers, async (req, res) => {

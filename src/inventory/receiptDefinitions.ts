@@ -26,6 +26,8 @@ export interface ReceiptFields {
   receiptDate: string;
   vendorChallanNo: string | null;
   notes: string | null;
+  /** Absent on receipts recorded before documents were added. */
+  documents?: Array<{ label: string; url: string }>;
   lines: StoredReceiptLine[];
   totalQuantity: number;
   searchText: string;
@@ -46,6 +48,7 @@ const fieldsSchema = z
     receiptDate: z.string(),
     vendorChallanNo: z.string().nullable(),
     notes: z.string().nullable(),
+    documents: z.array(z.object({ label: z.string(), url: z.string() }).strict()).max(20),
     lines: z
       .array(
         z
@@ -93,6 +96,7 @@ export const receiptsCollectionSpec = recordCollectionSpec(RECEIPTS_COLLECTION, 
     receiptDate: { bsonType: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
     vendorChallanNo: { bsonType: ['string', 'null'], maxLength: 50 },
     notes: { bsonType: ['string', 'null'], maxLength: 1000 },
+    documents: { bsonType: 'array', maxItems: 20 },
     lines: { bsonType: 'array', minItems: 1, maxItems: 200 },
     totalQuantity: { bsonType: ['int', 'long', 'double'], minimum: 1 },
   },

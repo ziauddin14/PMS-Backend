@@ -219,6 +219,7 @@ describe('creating purchase orders', () => {
     expect(po.approvedAmount).toBe(50000);
     expect(po.totalAmount).toBe(500 * 70 + 100 * 150); // 35000 + 15000 = 50000
     expect(po.lineCount).toBe(2);
+    expect(po.itemNames).toEqual(['Synthetic Box', 'Synthetic Book']);
     expect(po.totalQuantity).toBe(600);
     expect(po.lines[0]!.lineNo).toBe(1);
     expect(po.lines[0]!.quantityOrdered).toBe(500);

@@ -129,15 +129,46 @@ export const masterEntityKeys = [
   'items',
   'vendors',
   'warehouses',
+  'receivers',
 ] as const;
 export type MasterEntityKey = (typeof masterEntityKeys)[number];
 
-export const masterNameSchema = z
-  .string({ message: 'Name is required' })
-  .trim()
-  .min(1, { message: 'Name is required' })
-  .max(100, { message: 'Name must be at most 100 characters' })
-  .refine((value) => !/\p{Cc}/u.test(value), { message: 'Name contains invalid characters' });
+/**
+ * Text cleaning used by every free-text field: text is never rejected because of its characters.
+ * Windows line breaks become `\n`; invisible control characters are removed. Multi-line fields
+ * (notes) keep line breaks and tabs; single-line fields turn them into spaces.
+ */
+export function cleanText(value: string, multiline = false): string {
+  const normalised = value.replace(/\r\n?/g, '\n');
+  const cleaned = multiline
+    ? normalised.replace(/[^\P{Cc}\n\t]/gu, '')
+    : normalised.replace(/[\n\t]+/g, ' ').replace(/\p{Cc}/gu, '');
+  return cleaned.trim();
+}
+
+/** Required single-line text: cleaned, then checked for length. */
+export const requiredText = (max: number, label: string) =>
+  z
+    .string({ message: `${label} is required` })
+    .transform((value) => cleanText(value))
+    .pipe(
+      z
+        .string()
+        .min(1, { message: `${label} is required` })
+        .max(max, { message: `${label} must be at most ${max} characters` }),
+    );
+
+/** Optional text; empty becomes null. `multiline` keeps line breaks (notes). */
+export const optionalText = (max: number, label: string, multiline = false) =>
+  z
+    .string()
+    .transform((value) => cleanText(value, multiline))
+    .pipe(z.string().max(max, { message: `${label} must be at most ${max} characters` }))
+    .transform((value) => (value.length === 0 ? null : value))
+    .nullable()
+    .optional();
+
+export const masterNameSchema = requiredText(100, 'Name');
 
 export const objectIdStringSchema = z
   .string({ message: 'Is required' })
@@ -159,16 +190,33 @@ export const masterRecordSchema = z.object({
   divisionName: z.string().optional(),
   districtId: z.string().optional(),
   districtName: z.string().optional(),
+  /** Receivers: the city, plus every level above it. */
+  cityId: z.string().optional(),
+  cityName: z.string().optional(),
   /** Vendors only. */
   contactPerson: z.string().nullable().optional(),
+  /** Receivers only (personal data; receivers are visible to the Production Operator only). */
+  phone: z.string().nullable().optional(),
 });
 export type MasterRecord = z.infer<typeof masterRecordSchema>;
 
+/** Phone numbers: digits, spaces, +, - and brackets (e.g. 0300-1234567). */
+export const phoneSchema = z
+  .string()
+  .transform((value) => cleanText(value))
+  .pipe(
+    z
+      .string()
+      .max(30, { message: 'Phone must be at most 30 characters' })
+      .refine((value) => value === '' || /^[0-9+()\-\s]{5,30}$/.test(value), {
+        message: 'Phone may contain only digits, spaces, +, - and brackets',
+      }),
+  );
+
 const contactPersonSchema = z
   .string()
-  .trim()
-  .max(100, { message: 'Contact person must be at most 100 characters' })
-  .refine((value) => !/\p{Cc}/u.test(value), { message: 'Contains invalid characters' });
+  .transform((value) => cleanText(value))
+  .pipe(z.string().max(100, { message: 'Contact person must be at most 100 characters' }));
 
 export const masterListResponseSchema = z.object({
   items: z.array(masterRecordSchema),
@@ -187,6 +235,7 @@ export const masterListQuerySchema = z
     provinceId: objectIdStringSchema.optional(),
     divisionId: objectIdStringSchema.optional(),
     districtId: objectIdStringSchema.optional(),
+    cityId: objectIdStringSchema.optional(),
   })
   .strict();
 export type MasterListQuery = z.infer<typeof masterListQuerySchema>;
@@ -197,7 +246,9 @@ export const masterCreateSchema = z
     provinceId: objectIdStringSchema.optional(),
     divisionId: objectIdStringSchema.optional(),
     districtId: objectIdStringSchema.optional(),
+    cityId: objectIdStringSchema.optional(),
     contactPerson: contactPersonSchema.optional(),
+    phone: phoneSchema.optional(),
   })
   .strict();
 export type MasterCreateInput = z.infer<typeof masterCreateSchema>;
@@ -209,7 +260,9 @@ export const masterUpdateSchema = z
     provinceId: objectIdStringSchema.optional(),
     divisionId: objectIdStringSchema.optional(),
     districtId: objectIdStringSchema.optional(),
+    cityId: objectIdStringSchema.optional(),
     contactPerson: contactPersonSchema.optional(),
+    phone: phoneSchema.optional(),
     active: z.boolean().optional(),
   })
   .strict()
@@ -237,22 +290,14 @@ export const dateOnlySchema = z
     { message: 'Not a valid date' },
   );
 
-const optionalText = (max: number, label: string) =>
-  z
-    .string()
-    .trim()
-    .max(max, { message: `${label} must be at most ${max} characters` })
-    .refine((value) => !/\p{Cc}/u.test(value), { message: `${label} contains invalid characters` })
-    .transform((value) => (value.length === 0 ? null : value))
-    .nullable()
-    .optional();
-
 export const demandLineInputSchema = z
   .object({
     /** Present for existing lines when editing; absent for new lines. */
     id: objectIdStringSchema.optional(),
     itemId: objectIdStringSchema,
     destinationDivisionId: objectIdStringSchema,
+    /** Optional destination city; must lie in the destination division. */
+    cityId: objectIdStringSchema.nullable().optional(),
     quantity: z
       .number({ message: 'Quantity is required' })
       .int({ message: 'Quantity must be a whole number' })
@@ -365,6 +410,8 @@ export const demandLineSchema = z.object({
   lineNo: z.number().int(),
   item: masterRefSchema,
   destinationDivision: masterRefSchema.extend({ provinceName: z.string().nullable() }),
+  /** Destination city (with its district), when recorded. */
+  city: masterRefSchema.extend({ districtName: z.string().nullable() }).nullable(),
   quantity: z.number().int(),
   quantityDelivered: z.number().int(),
   quantityRemaining: z.number().int(),
@@ -405,6 +452,32 @@ export const poCompletionStatuses = ['PENDING', 'PARTIAL', 'COMPLETE'] as const;
 export type PoCompletionStatus = (typeof poCompletionStatuses)[number];
 export const poCompletionStatusSchema = z.enum(poCompletionStatuses);
 
+/** Supporting document reference (e.g. a Google Drive link). Files are not stored by the PMS. */
+export const documentRefInputSchema = z
+  .object({
+    label: z
+      .string({ message: 'Document name is required' })
+      .trim()
+      .min(1, { message: 'Document name is required' })
+      .max(100, { message: 'Document name must be at most 100 characters' }),
+    url: z
+      .string({ message: 'Link is required' })
+      .trim()
+      .max(1000, { message: 'Link is too long' })
+      .refine((value) => /^https:\/\/[^\s]+$/i.test(value), {
+        message: 'Link must start with https://',
+      }),
+  })
+  .strict();
+export type DocumentRefInput = z.infer<typeof documentRefInputSchema>;
+export const documentRefSchema = z.object({ label: z.string(), url: z.string() });
+export type DocumentRef = z.infer<typeof documentRefSchema>;
+export const documentsInputSchema = z
+  .array(documentRefInputSchema)
+  .max(20, { message: 'At most 20 documents' })
+  .optional()
+  .default([]);
+
 export const paymentScheduleEntryInputSchema = z
   .object({
     entryNo: z.number().int().min(1).optional(),
@@ -412,7 +485,7 @@ export const paymentScheduleEntryInputSchema = z
     plannedAmount: z
       .number({ message: 'Planned amount is required' })
       .positive({ message: 'Planned amount must be greater than 0' }),
-    note: optionalText(200, 'Schedule note'),
+    note: optionalText(200, 'Schedule note', true),
   })
   .strict();
 export type PaymentScheduleEntryInput = z.infer<typeof paymentScheduleEntryInputSchema>;
@@ -426,7 +499,7 @@ export const invoiceInputSchema = z
       .min(0, { message: 'Invoice amount cannot be negative' })
       .nullable()
       .optional(),
-    notes: optionalText(500, 'Invoice notes'),
+    notes: optionalText(500, 'Invoice notes', true),
   })
   .strict();
 export type InvoiceInput = z.infer<typeof invoiceInputSchema>;
@@ -445,7 +518,7 @@ export const purchaseOrderLineInputSchema = z
     unitPrice: z
       .number({ message: 'Unit price is required' })
       .min(0, { message: 'Unit price cannot be negative' }),
-    notes: optionalText(500, 'Line note'),
+    notes: optionalText(500, 'Line note', true),
   })
   .strict();
 export type PurchaseOrderLineInput = z.infer<typeof purchaseOrderLineInputSchema>;
@@ -457,12 +530,7 @@ const poLinesSchema = z
 
 export const purchaseOrderCreateSchema = z
   .object({
-    poNumber: z
-      .string({ message: 'PO number is required' })
-      .trim()
-      .min(1, { message: 'PO number is required' })
-      .max(50, { message: 'PO number must be at most 50 characters' })
-      .refine((val) => !/\p{Cc}/u.test(val), { message: 'PO number contains invalid characters' }),
+    poNumber: requiredText(50, 'PO number'),
     poDate: dateOnlySchema,
     vendorId: objectIdStringSchema,
     deliveryRoute: deliveryRouteSchema,
@@ -472,9 +540,11 @@ export const purchaseOrderCreateSchema = z
       .number({ message: 'Approved amount is required' })
       .min(0, { message: 'Approved amount cannot be negative' }),
     expectedCompletionDate: dateOnlySchema.nullable().optional(),
-    notes: optionalText(1000, 'Notes'),
+    notes: optionalText(1000, 'Notes', true),
     invoice: invoiceInputSchema.nullable().optional(),
     paymentSchedule: z.array(paymentScheduleEntryInputSchema).optional().default([]),
+    /** Photos / scans of the invoice or PO (links, or images uploaded to Cloudinary). */
+    documents: documentsInputSchema,
     lines: poLinesSchema,
   })
   .strict();
@@ -483,13 +553,7 @@ export type PurchaseOrderCreateInput = z.infer<typeof purchaseOrderCreateSchema>
 export const purchaseOrderUpdateSchema = z
   .object({
     rev: z.number({ message: 'rev is required' }).int().min(1),
-    poNumber: z
-      .string()
-      .trim()
-      .min(1, { message: 'PO number is required' })
-      .max(50, { message: 'PO number must be at most 50 characters' })
-      .refine((val) => !/\p{Cc}/u.test(val), { message: 'PO number contains invalid characters' })
-      .optional(),
+    poNumber: requiredText(50, 'PO number').optional(),
     poDate: dateOnlySchema.optional(),
     vendorId: objectIdStringSchema.optional(),
     deliveryRoute: deliveryRouteSchema.optional(),
@@ -497,9 +561,13 @@ export const purchaseOrderUpdateSchema = z
     destinationDivisionId: objectIdStringSchema.nullable().optional(),
     approvedAmount: z.number().min(0, { message: 'Approved amount cannot be negative' }).optional(),
     expectedCompletionDate: dateOnlySchema.nullable().optional(),
-    notes: optionalText(1000, 'Notes'),
+    notes: optionalText(1000, 'Notes', true),
     invoice: invoiceInputSchema.nullable().optional(),
     paymentSchedule: z.array(paymentScheduleEntryInputSchema).optional(),
+    documents: z
+      .array(documentRefInputSchema)
+      .max(20, { message: 'At most 20 documents' })
+      .optional(),
     lines: poLinesSchema.optional(),
   })
   .strict()
@@ -600,6 +668,8 @@ export const purchaseOrderSummarySchema = z.object({
   approvedAmount: z.number(),
   totalAmount: z.number(),
   lineCount: z.number().int(),
+  /** Distinct item names of the lines, in line order (shown in the PO list). */
+  itemNames: z.array(z.string()),
   totalQuantity: z.number().int(),
   /** Units received from the vendor so far (M7, active receipts only). */
   totalReceived: z.number().int(),
@@ -616,6 +686,7 @@ export type PurchaseOrderSummary = z.infer<typeof purchaseOrderSummarySchema>;
 
 export const purchaseOrderDetailSchema = purchaseOrderSummarySchema.extend({
   notes: z.string().nullable(),
+  documents: z.array(documentRefSchema),
   invoice: invoiceMetaSchema.nullable(),
   paymentSchedule: z.array(paymentScheduleEntrySchema),
   lines: z.array(purchaseOrderLineSchema),

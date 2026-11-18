@@ -149,8 +149,10 @@ describe('master data — validation and references', () => {
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('VALIDATION_FAILED');
     }
+    // Invisible control characters are removed instead of rejecting the text.
     const control = await create('items', { name: 'Synthetic\u0007Bell' });
-    expect(control.status).toBe(400);
+    expect(control.status).toBe(201);
+    expect(control.body.name).toBe('SyntheticBell');
   });
 
   it('requires a valid, existing and active province for divisions', async () => {
@@ -423,6 +425,51 @@ describe('master data — districts, cities and vendor contacts', () => {
     expect(
       (await create('items', { name: 'Synthetic Item', contactPerson: 'Synthetic' })).status,
     ).toBe(400);
+  });
+});
+
+describe('master data — receivers (personal data)', () => {
+  it('stores receivers per city with phone, visible to the operator only', async () => {
+    const province = (await create('provinces', { name: 'Synthetic Province' })).body;
+    const division = (
+      await create('divisions', { name: 'Synthetic Division', provinceId: province.id })
+    ).body;
+    const district = (
+      await create('districts', { name: 'Synthetic District', divisionId: division.id })
+    ).body;
+    const city = (await create('cities', { name: 'Synthetic City', districtId: district.id })).body;
+
+    const receiver = await create('receivers', {
+      name: 'Synthetic Receiver',
+      cityId: city.id,
+      phone: ' 0300-0000000 ',
+    });
+    expect(receiver.status).toBe(201);
+    expect(receiver.body).toMatchObject({
+      code: 'RCV-000001',
+      phone: '0300-0000000',
+      cityId: city.id,
+      cityName: 'Synthetic City',
+      districtName: 'Synthetic District',
+      divisionId: division.id,
+      divisionName: 'Synthetic Division',
+      provinceName: 'Synthetic Province',
+    });
+    expect((await create('receivers', { name: 'Synthetic No City' })).status).toBe(400);
+    const badPhone = await create('receivers', {
+      name: 'Synthetic Bad',
+      cityId: city.id,
+      phone: 'call me',
+    });
+    expect(badPhone.status).toBe(400);
+    expect(badPhone.body.error.details[0].path).toBe('phone');
+    expect((await create('items', { name: 'Synthetic Item', phone: '0300' })).status).toBe(400);
+
+    expect((await list('receivers', `?cityId=${city.id}`)).body.total).toBe(1);
+    expect((await list('receivers', '', viewer)).status).toBe(403);
+    expect((await list(`receivers/${receiver.body.id}`, '', viewer)).status).toBe(403);
+    // A city with active receivers cannot be deactivated.
+    expect((await update('cities', city.id, { rev: 1, active: false })).status).toBe(409);
   });
 });
 

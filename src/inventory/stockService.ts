@@ -7,10 +7,6 @@ import type {
 } from '../contracts/operations.js';
 import type { Database } from '../db/mongo.js';
 import {
-  PURCHASE_ORDERS_COLLECTION,
-  type PurchaseOrderDoc,
-} from '../purchaseOrders/definitions.js';
-import {
   STOCK_BALANCES,
   STOCK_MOVEMENTS,
   actorLabel,
@@ -21,6 +17,7 @@ import {
   type StockBalanceDoc,
   type StockMovementDoc,
 } from './ledger.js';
+import { lotRefOf, resolveLots } from './lots.js';
 
 /** Read-only stock views (M7): balances by location × item × PO lot, and the movement ledger. */
 export class StockService {
@@ -125,11 +122,11 @@ export class StockService {
       locationId: ObjectId;
       itemId: ObjectId;
       purchaseOrderId: ObjectId;
+      poLineId: ObjectId;
     }>,
   ) {
     const db = this.database.db;
-    const poIds = [...new Set(docs.map((d) => d.purchaseOrderId.toHexString()))];
-    const [items, locations, pos] = await Promise.all([
+    const [items, locations, lots] = await Promise.all([
       fetchMasterMap(
         db,
         'items',
@@ -139,28 +136,13 @@ export class StockService {
         db,
         docs.map((d) => ({ kind: d.locationKind, id: d.locationId })),
       ),
-      poIds.length === 0
-        ? Promise.resolve([] as PurchaseOrderDoc[])
-        : db
-            .collection<PurchaseOrderDoc>(PURCHASE_ORDERS_COLLECTION)
-            .find(
-              { _id: { $in: poIds.map((id) => new ObjectId(id)) } },
-              { projection: { code: 1, poNumber: 1, 'lines._id': 1, 'lines.lineNo': 1 } },
-            )
-            .toArray(),
+      resolveLots(
+        db,
+        docs.map((d) => d.poLineId),
+      ),
     ]);
-    const poMap = new Map(pos.map((po) => [po._id.toHexString(), po]));
-    const lotOf = (purchaseOrderId: ObjectId, poLineId: ObjectId) => {
-      const po = poMap.get(purchaseOrderId.toHexString());
-      const line = po?.lines.find((l) => l._id.equals(poLineId));
-      return {
-        purchaseOrderId: purchaseOrderId.toHexString(),
-        purchaseOrderCode: po?.code ?? '',
-        poNumber: po?.poNumber ?? '(missing PO)',
-        poLineId: poLineId.toHexString(),
-        poLineNo: line?.lineNo ?? 0,
-      };
-    };
+    const lotOf = (purchaseOrderId: ObjectId, poLineId: ObjectId) =>
+      lotRefOf(lots, purchaseOrderId, poLineId);
     return { items, locations, lotOf };
   }
 }

@@ -5,11 +5,11 @@ import { ensureCollection, recordCollectionSpec, type CollectionSpec } from '../
 import type { RecordDefinition, StoredRecord } from '../records/recordStore.js';
 
 /** Fields that link a location record to its parent (province → division → district → city). */
-export const masterParentFields = ['provinceId', 'divisionId', 'districtId'] as const;
+export const masterParentFields = ['provinceId', 'divisionId', 'districtId', 'cityId'] as const;
 export type MasterParentField = (typeof masterParentFields)[number];
 
 /** Optional text fields that only some lists have. */
-export const masterExtraFields = ['contactPerson'] as const;
+export const masterExtraFields = ['contactPerson', 'phone'] as const;
 export type MasterExtraField = (typeof masterExtraFields)[number];
 
 /** Stored fields of every master record (plus the M2 base fields from RecordStore). */
@@ -24,8 +24,12 @@ export interface MasterFields {
   divisionId?: ObjectId;
   /** Cities only. */
   districtId?: ObjectId;
+  /** Receivers only. */
+  cityId?: ObjectId;
   /** Vendors only: the person to contact at the vendor company. */
   contactPerson?: string | null;
+  /** Receivers only: phone number (personal data). */
+  phone?: string | null;
   [key: string]: unknown;
 }
 export type MasterRecordDoc = StoredRecord<MasterFields>;
@@ -58,6 +62,7 @@ const PARENT_INDEX_PREFIX: Record<MasterParentField, string> = {
   provinceId: 'province',
   divisionId: 'division',
   districtId: 'district',
+  cityId: 'city',
 };
 
 function build(
@@ -136,12 +141,21 @@ export const MASTER_ENTITIES: Record<MasterEntityKey, MasterEntityConfig> = {
   }),
   cities: build('cities', 'City', 'CTY', {
     parent: { field: 'districtId', entity: 'districts', label: 'District' },
+    children: [{ entity: 'receivers', field: 'cityId', label: 'receiver' }],
   }),
   departments: build('departments', 'Department', 'DEP'),
   items: build('items', 'Item', 'ITM'),
   vendors: build('vendors', 'Vendor', 'VEN', { extraFields: ['contactPerson'] }),
   warehouses: build('warehouses', 'Warehouse', 'WHS'),
+  /** Division receivers (name and phone) per city, used to fill demand lines. */
+  receivers: build('receivers', 'Receiver', 'RCV', {
+    parent: { field: 'cityId', entity: 'cities', label: 'City' },
+    extraFields: ['phone'],
+  }),
 };
+
+/** Lists that contain personal data (Q-30): only the Production Operator may read them. */
+export const PERSONAL_DATA_ENTITIES: readonly MasterEntityKey[] = ['receivers'];
 
 export async function ensureMasterDataCollections(db: Db): Promise<void> {
   for (const config of Object.values(MASTER_ENTITIES)) await ensureCollection(db, config.spec);

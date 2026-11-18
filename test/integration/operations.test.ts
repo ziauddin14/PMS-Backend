@@ -13,6 +13,7 @@ import {
 } from '../../src/contracts/api.js';
 import {
   dispatchDetailSchema,
+  openingStockDetailSchema,
   paymentSchema,
   receiptDetailSchema,
   reportResponseSchema,
@@ -616,5 +617,149 @@ describe('Scenario C — partial operations, guards and concurrency', () => {
     await send('post', `/sync/jobs/${id}/retry`, {}).expect(409);
     const list = await get('/sync/jobs?status=RETRY').expect(200);
     expect(list.body.total).toBe(1);
+  });
+});
+
+describe('Opening stock — goods already in a warehouse', () => {
+  it('adds warehouse stock without a PO, can be dispatched, and cancels only while unused', async () => {
+    // Viewers cannot add opening stock.
+    await send(
+      'post',
+      '/stock/opening',
+      {
+        warehouseId: refs.warehouse,
+        entryDate: today,
+        lines: [{ itemId: refs.itemBox, quantity: 5 }],
+      },
+      viewer,
+    ).expect(403);
+    // Duplicate items and future dates are rejected with field paths.
+    const invalid = await send('post', '/stock/opening', {
+      warehouseId: refs.warehouse,
+      entryDate: '2999-01-01',
+      lines: [
+        { itemId: refs.itemBox, quantity: 5 },
+        { itemId: refs.itemBox, quantity: 1 },
+      ],
+    }).expect(400);
+    const paths = (invalid.body.error.details as Array<{ path: string }>).map((d) => d.path);
+    expect(paths).toEqual(expect.arrayContaining(['entryDate', 'lines.1.itemId']));
+
+    const created = await send('post', '/stock/opening', {
+      warehouseId: refs.warehouse,
+      entryDate: today,
+      reference: 'Synthetic old PO 12',
+      notes: 'Counted in the warehouse\nSecond line',
+      lines: [
+        { itemId: refs.itemBox, quantity: 40 },
+        { itemId: refs.itemBook, quantity: 10 },
+      ],
+    }).expect(201);
+    const entry = openingStockDetailSchema.parse(created.body);
+    expect(entry.code).toMatch(/^OPN-\d{6}$/);
+    expect(entry.totalQuantity).toBe(50);
+    expect(entry.notes).toBe('Counted in the warehouse\nSecond line');
+
+    const list = await get('/stock/opening', viewer).expect(200);
+    expect(list.body.total).toBe(1);
+
+    const balances = stockBalanceResponseSchema.parse(
+      (await get(`/stock/balances?locationKind=WAREHOUSE&itemId=${refs.itemBox}`).expect(200)).body,
+    );
+    expect(balances.totalQuantity).toBe(40);
+    const lot = balances.items[0]!.lot;
+    expect(lot.purchaseOrderCode).toBe(entry.code);
+    expect(lot.poNumber).toBe('Synthetic old PO 12');
+    const dash = dashboardSummarySchema.parse((await get('/dashboard/summary').expect(200)).body);
+    expect(dash.indicators.find((i) => i.key === 'stockLots')?.value).toBe(50);
+
+    // Dispatch from the opening lot against a demand.
+    const demand = await createDemand([
+      { itemId: refs.itemBox, destinationDivisionId: refs.divisionA, quantity: 15 },
+    ]);
+    const dispatch = dispatchDetailSchema.parse(
+      (
+        await send('post', '/dispatches', {
+          dispatchDate: today,
+          sourceKind: 'WAREHOUSE',
+          sourceId: refs.warehouse,
+          destinationDivisionId: refs.divisionA,
+          demandId: demand.id,
+          lines: [{ poLineId: lot.poLineId, quantity: 15, demandLineId: demand.lines[0]!.id }],
+        }).expect(201)
+      ).body,
+    );
+    expect(dispatch.lines[0]!.lot.purchaseOrderCode).toBe(entry.code);
+
+    const movements = stockMovementResponseSchema.parse(
+      (await get(`/stock/movements?itemId=${refs.itemBox}`).expect(200)).body,
+    );
+    expect(movements.items.map((m) => m.type).sort()).toEqual(['DISPATCH', 'OPENING']);
+
+    const report = reportResponseSchema.parse((await get('/reports/stock').expect(200)).body);
+    const boxRow = report.rows.find((r) => r.item === 'Synthetic Box');
+    expect(boxRow?.quantity).toBe(25);
+    expect(boxRow?.vendor).toBeNull();
+
+    // Cannot cancel while its stock has been dispatched.
+    await send('post', `/stock/opening/${entry.id}/cancel`, {
+      rev: entry.rev,
+      reason: 'Synthetic recount',
+    }).expect(409);
+    await send('post', `/dispatches/${dispatch.id}/cancel`, {
+      rev: dispatch.rev,
+      reason: 'Synthetic mistake',
+    }).expect(200);
+    const cancelled = openingStockDetailSchema.parse(
+      (
+        await send('post', `/stock/opening/${entry.id}/cancel`, {
+          rev: entry.rev,
+          reason: 'Synthetic recount',
+        }).expect(200)
+      ).body,
+    );
+    expect(cancelled.status).toBe('CANCELLED');
+    const after = stockBalanceResponseSchema.parse(
+      (await get('/stock/balances?locationKind=WAREHOUSE').expect(200)).body,
+    );
+    expect(after.totalQuantity).toBe(0);
+  });
+});
+
+describe('Supporting documents and image uploads', () => {
+  it('stores challan and invoice photos on receipts and purchase orders', async () => {
+    const photo = { label: 'Synthetic invoice photo', url: 'https://res.cloudinary.com/x/a.jpg' };
+    const po = await createPo({ documents: [photo] });
+    expect(po.documents).toEqual([photo]);
+    const edited = purchaseOrderDetailSchema.parse(
+      (await send('patch', `/purchase-orders/${po.id}`, { rev: po.rev, documents: [] }).expect(200))
+        .body,
+    );
+    expect(edited.documents).toEqual([]);
+    await send('patch', `/purchase-orders/${po.id}`, {
+      rev: edited.rev,
+      documents: [{ label: 'Bad', url: 'http://insecure.example/a.jpg' }],
+    }).expect(400);
+
+    const challan = { label: 'Synthetic challan photo', url: 'https://res.cloudinary.com/x/b.jpg' };
+    const receipt = receiptDetailSchema.parse(
+      (
+        await send('post', '/receipts', {
+          purchaseOrderId: po.id,
+          receiptDate: today,
+          documents: [challan],
+          lines: [{ poLineId: po.lines[0]!.id, quantity: 1 }],
+        }).expect(201)
+      ).body,
+    );
+    expect(receipt.documents).toEqual([challan]);
+  });
+
+  it('signs uploads for the operator only and explains when uploads are not set up', async () => {
+    expect((await get('/uploads/config', viewer).expect(200)).body).toEqual({ enabled: false });
+    await send('post', '/uploads/signature', { purpose: 'dispatch' }, viewer).expect(403);
+    await send('post', '/uploads/signature', { purpose: 'unknown' }).expect(400);
+    const res = await send('post', '/uploads/signature', { purpose: 'dispatch' }).expect(503);
+    expect(res.body.error.message).toMatch(/not set up/);
   });
 });

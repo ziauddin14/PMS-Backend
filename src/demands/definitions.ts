@@ -12,6 +12,8 @@ export interface StoredDemandLine {
   lineNo: number;
   itemId: ObjectId;
   destinationDivisionId: ObjectId;
+  /** Optional destination city inside the destination division (absent on older lines). */
+  cityId?: ObjectId | null;
   quantity: number;
   receiverName: string | null;
   receiverPhone: string | null;
@@ -41,6 +43,7 @@ const lineSchema = z
     lineNo: z.number().int().min(1),
     itemId: objectId,
     destinationDivisionId: objectId,
+    cityId: objectId.nullable().optional(),
     quantity: z.number().int().min(1),
     receiverName: z.string().nullable(),
     receiverPhone: z.string().nullable(),
@@ -81,6 +84,7 @@ const lineJsonSchema = {
     lineNo: { bsonType: ['int', 'long'], minimum: 1 },
     itemId: { bsonType: 'objectId' },
     destinationDivisionId: { bsonType: 'objectId' },
+    cityId: { bsonType: ['objectId', 'null'] },
     quantity: { bsonType: ['int', 'long', 'double'], minimum: 1 },
     receiverName: { bsonType: ['string', 'null'] },
     receiverPhone: { bsonType: ['string', 'null'] },

@@ -11,7 +11,8 @@ import {
 } from '../contracts/api.js';
 import type { AuthService } from '../auth/authService.js';
 import type { MutationContext } from '../domain/context.js';
-import { NotFoundError } from '../errors.js';
+import { ForbiddenError, NotFoundError } from '../errors.js';
+import { PERSONAL_DATA_ENTITIES } from '../masterData/definitions.js';
 import type { MasterDataService } from '../masterData/masterDataService.js';
 import { parseOrThrow } from '../validation.js';
 import { authenticate, getAuth, requireCsrf, requireRole } from './authMiddleware.js';
@@ -22,6 +23,13 @@ function entityParam(value: unknown): MasterEntityKey {
     return value as MasterEntityKey;
   }
   throw new NotFoundError('Unknown master-data list');
+}
+
+/** Lists with personal data (receivers) are readable by the Production Operator only (Q-30). */
+function assertMayRead(res: Response, entity: MasterEntityKey): void {
+  if (PERSONAL_DATA_ENTITIES.includes(entity) && getAuth(res).user.role !== 'OPERATOR') {
+    throw new ForbiddenError();
+  }
 }
 
 function mutationContext(res: Response): MutationContext {
@@ -48,12 +56,15 @@ export function masterDataRoutes(
 
   router.get('/master/:entity', ...readers, async (req, res) => {
     const entity = entityParam(req.params.entity);
+    assertMayRead(res, entity);
     const query = parseOrThrow(masterListQuerySchema, req.query);
     res.json(await service.list(entity, query));
   });
 
   router.get('/master/:entity/:id', ...readers, async (req, res) => {
-    res.json(await service.get(entityParam(req.params.entity), String(req.params.id)));
+    const entity = entityParam(req.params.entity);
+    assertMayRead(res, entity);
+    res.json(await service.get(entity, String(req.params.id)));
   });
 
   router.post('/master/:entity', ...writers, validateBody(masterCreateSchema), async (req, res) => {

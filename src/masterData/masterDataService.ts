@@ -37,8 +37,8 @@ function cleanText(value: string): string | null {
 }
 
 /** `provinceId` → `province`, used to name the DTO fields of each ancestor level. */
-function levelOf(field: MasterParentField): 'province' | 'division' | 'district' {
-  return field.slice(0, -2) as 'province' | 'division' | 'district';
+function levelOf(field: MasterParentField): 'province' | 'division' | 'district' | 'city' {
+  return field.slice(0, -2) as 'province' | 'division' | 'district' | 'city';
 }
 
 /**

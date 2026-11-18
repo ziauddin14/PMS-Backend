@@ -50,6 +50,8 @@ export interface PurchaseOrderFields {
   notes: string | null;
   invoice: StoredInvoice | null;
   paymentSchedule: StoredPaymentScheduleEntry[];
+  /** Photos / scans (invoice, PO copy). Absent on POs created before documents were added. */
+  documents?: Array<{ label: string; url: string }>;
   nextLineNo: number;
   lines: StoredPurchaseOrderLine[];
   /** Lower-case, space-normalised text for literal search. */
@@ -107,6 +109,7 @@ const fieldsSchema = z
     notes: z.string().nullable(),
     invoice: invoiceSchema.nullable(),
     paymentSchedule: z.array(scheduleSchema),
+    documents: z.array(z.object({ label: z.string(), url: z.string() }).strict()).max(20),
     nextLineNo: z.number().int().min(1),
     lines: z.array(lineSchema).min(1),
     searchText: z.string(),
@@ -193,6 +196,7 @@ export const purchaseOrdersCollectionSpec = recordCollectionSpec(PURCHASE_ORDERS
     notes: { bsonType: ['string', 'null'], maxLength: 1000 },
     invoice: { ...invoiceJsonSchema, bsonType: ['object', 'null'] },
     paymentSchedule: { bsonType: 'array', items: scheduleJsonSchema },
+    documents: { bsonType: 'array', maxItems: 20 },
     nextLineNo: { bsonType: ['int', 'long'], minimum: 1 },
     lines: { bsonType: 'array', minItems: 1, maxItems: 200, items: lineJsonSchema },
     searchText: { bsonType: 'string' },
